@@ -1,7 +1,8 @@
 # แผนการทดลองเมื่อรันบน hardware ใหม่
 
-**Target hardware:** i5-12600K (10C: 6P+4E) + 32 GB RAM + RTX 5070 (12 GB VRAM, Blackwell)
-**Current bottleneck:** GTX 1650 Ti 4 GB + RAM จำกัด → GPU lanes ≤ 8k, SubprocVecEnv OOM, eval CPU-bound
+**Target hardware (planned):** i5-12600K (10C: 6P+4E) + 32 GB RAM + RTX 5070 (12 GB VRAM, Blackwell)
+**Actual hardware in hand (2026-05-28):** Intel Core Ultra 7 265 (20 cores, Arrow Lake) + 32 GB DDR5-5600 + **RTX PRO 4000 Blackwell 24 GB GDDR7** (driver 582.16, CUDA 13.0). Workstation card — 2× VRAM headroom vs the planned 5070.
+**Old machine bottleneck:** GTX 1650 Ti 4 GB + RAM จำกัด → GPU lanes ≤ 8k, SubprocVecEnv OOM, eval CPU-bound
 
 > **Honest framing first:** Hardware นี้ทำให้**ทดลองได้เร็วขึ้นและเยอะขึ้น** ไม่ได้สร้าง alpha
 > finding หลักของโปรเจกต์ (variance ครอบงำ signal, no reliable edge บน gold M5) ไม่ได้แก้
@@ -24,18 +25,15 @@
 
 ## Tier 1 — ทำเป็นอย่างแรก (high ROI, low effort)
 
-### 1.1 เปิด SubprocVecEnv สำหรับ SB3 path
-SubprocVecEnv ปัจจุบันถูกปิดเพราะ 8 torch workers เคย OOM ที่ RAM เดิม กับ 32 GB จะรองได้สบาย
+### 1.1 ~~เปิด SubprocVecEnv สำหรับ SB3 path~~ **OBSOLETE (2026-05-28)**
 
-```bash
-# ทดสอบ SubprocVecEnv 8 workers
-python scripts/grid_eval.py --engine sb3 --num-envs 64 --use-subproc \
-  --seeds 3 --folds 5 --timesteps 30000 --tag subproc_smoke
-```
+แผนเดิม: เพิ่ม `--use-subproc` ใน [scripts/grid_eval.py](../scripts/grid_eval.py) ให้สลับ DummyVecEnv → SubprocVecEnv
 
-**ต้องเพิ่ม CLI flag `--use-subproc`** ใน [scripts/grid_eval.py](../scripts/grid_eval.py) ที่ส่งต่อไปยัง `_train()` ใน [validation/grid.py](../validation/grid.py) เพื่อสลับ DummyVecEnv → SubprocVecEnv
+**ทำไม obsolete:** [validation/grid.py:140](../validation/grid.py#L140) ใช้ `VectorizedGoldTradingEnv` (single-process **numpy batched** VecEnv ของโปรเจกต์เอง) อยู่แล้ว — ไม่ได้ใช้ `DummyVecEnv`/`SubprocVecEnv` ของ SB3. Numpy batched env เร็วกว่า SubprocVecEnv ในเคสนี้เพราะ env ของเราเบามาก (Python overhead/IPC > workload จริง). ดู docstring ใน [env/vectorized_env.py:1-23](../env/vectorized_env.py#L1-L23).
 
-**คาดหวัง:** SB3 training เร็วขึ้น 3–4x (env stepping ขนานจริง 8+ cores)
+ถ้าจะใช้ SubprocVecEnv จริง ๆ อยู่แล้วใน [validation/walk_forward.py:177](../validation/walk_forward.py#L177) — เปิดผ่าน `python scripts/train.py --subproc` แทน (ไม่เกี่ยวกับ grid_eval).
+
+**สรุป:** ข้ามไป Tier 1.2.
 
 ### 1.2 GPU benchmark 16k–65k lanes ใหม่ (สะอาด ไม่มี contention)
 ```bash
