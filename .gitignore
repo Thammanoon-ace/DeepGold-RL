@@ -43,8 +43,8 @@ Thumbs.db
 .claude/
 # (CLAUDE.md at the repo root IS tracked — it travels with the project)
 
-# Grid evaluation outputs (regenerable)
-logs/grid/
+# Grid evaluation outputs — TRACKED (cells.csv/summary.json are tiny scientific
+# artifacts used by compare_grids.py to baseline new runs against past results)
 
 # Background task / temporary outputs
 bg_task_logs/
