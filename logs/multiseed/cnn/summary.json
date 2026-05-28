@@ -1,0 +1,15 @@
+{
+  "seeds": [
+    0,
+    1000,
+    2000,
+    3000
+  ],
+  "mean_return_mean": 5.489999999999999,
+  "mean_return_std": 23.397737070067265,
+  "compounded_mean": 22.8975,
+  "compounded_std": 106.24387802951283,
+  "compounded_min": -61.86,
+  "compounded_max": 204.37,
+  "verdict": "NOT RELIABLE: results swing wildly across seeds (variance dominates)."
+}

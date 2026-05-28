@@ -1,0 +1,127 @@
+# ---------------------------------------------------------------------------
+# DeepGold RL — experiment configuration
+# ---------------------------------------------------------------------------
+# Every key here mirrors a field of the dataclasses in config/config.py.
+# Anything you omit falls back to the dataclass default. Load with:
+#     from config.config import Config
+#     cfg = Config.from_yaml("config/config.yaml")
+# ---------------------------------------------------------------------------
+
+data:
+  symbol: XAUUSD
+  timeframe: M5            # M5 | M15 | H1
+  csv_filename: XAUUSD_M5.csv
+  datetime_column: time
+  missing_value_strategy: ffill   # ffill | drop | interpolate
+  train_start: null        # null => use earliest available bar
+  test_start: "2025-01-01" # held-out evaluation set (walk-forward)
+  test_end: null
+
+features:
+  rsi_period: 14
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  ema_fast: 12
+  ema_slow: 26
+  atr_period: 14
+  volatility_window: 20
+  multi_timeframe: []      # e.g. [H1] or [H1, H4] to add higher-TF features
+  regime_window: 100       # volatility-regime baseline lookback (0 = off)
+  use_regime_features: false  # V3.5/5B: add regime_trend + regime_vol to observation
+  # Phase 4B — Indicator Expansion System (opt-in extra feature groups):
+  #   trend | momentum | volatility | candle | structure | volume
+  feature_groups: []       # add incrementally; validate each with feature_ab.py
+  correlation_threshold: 0.0   # >0 drops features correlated above this (fit on train)
+  sma_period: 50
+  vwap_window: 50
+  roc_period: 10
+  stoch_rsi_period: 14
+  bb_period: 20
+  bb_std: 2.0
+  hist_vol_window: 50
+  structure_window: 50
+  slope_window: 20
+  volume_window: 20
+
+env:
+  initial_balance: 10000.0
+  window_size: 32
+  contract_size: 100.0
+  leverage: 30.0
+  spread: 0.20
+  slippage: 0.05
+  commission_per_lot: 7.0
+  max_position_lots: 1.0
+  risk_fraction: 0.02
+  stop_loss_pct: 0.01
+  take_profit_pct: 0.02
+  max_drawdown_pct: 0.40
+  reward_mode: absolute    # absolute | excess (beat buy-hold) | dsr (info ratio)
+  dsr_eta: 0.01
+  reward_scaling: 0.001
+  drawdown_penalty_weight: 0.5
+  overtrading_penalty: 0.0001
+  holding_penalty: 0.0
+  min_bars_between_trades: 0
+  # V3.5 / 5C trade-frequency control (0 / neutral = unchanged behaviour)
+  min_hold_bars: 0
+  max_trades_per_episode: 0
+  trade_penalty_growth: 0.0
+  atr_period: 14
+  volatility_target_sizing: false   # V3.5: ATR-based constant-risk sizing
+  vol_target_risk_atr: 1.5
+
+training:
+  total_timesteps: 1000000
+  n_envs: 4                # parallel envs (DummyVecEnv, in-process). SubprocVecEnv off by default
+  seed: 42
+  device: auto            # auto | cuda | cpu
+  algo: ppo               # ppo (on-policy) | dqn (off-policy, experimental)
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 512          # larger minibatch -> bigger GPU matmuls in the update phase
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  net_arch: [128, 128]
+  checkpoint_freq: 50000
+  eval_freq: 50000
+  model_name: ppo_gold
+  # Deep sequence architecture (V3): mlp | lstm | transformer | cnn
+  policy_arch: mlp
+  features_dim: 128
+  lstm_hidden: 128
+  lstm_layers: 1
+  transformer_d_model: 64
+  transformer_nhead: 4
+  transformer_layers: 2
+  cnn_channels: [32, 64]
+  cnn_kernel: 3
+  # DQN-only (used when algo: dqn)
+  dqn_buffer_size: 100000
+  dqn_learning_starts: 10000
+  dqn_target_update_interval: 2000
+  dqn_train_freq: 4
+  dqn_exploration_fraction: 0.2
+  dqn_exploration_final_eps: 0.05
+
+backtest:
+  deterministic: true
+  risk_free_rate: 0.0
+  bars_per_year: 72576     # 288 bars/day * 252 trading days (M5)
+  save_plots: true
+
+live:
+  enabled: false
+  symbol: XAUUSD
+  timeframe: M5
+  magic_number: 20250526
+  poll_seconds: 30
+  max_open_positions: 1
+  max_lots: 0.10
+  dry_run: true
