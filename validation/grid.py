@@ -27,7 +27,7 @@ import pandas as pd
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecMonitor, VecNormalize
 
-from backtest.backtester import run_episode
+from backtest.backtester import run_episode, run_episode_ter_gated
 from backtest.baselines import buy_and_hold_return
 from backtest.metrics import compute_report
 from config.config import Config
@@ -185,8 +185,28 @@ class GridEvaluator:
         return ac
 
     def _evaluate(self, model, test_df: pd.DataFrame, feat_cols: List[str]) -> dict:
+        # Note (2026-05-28): the Tier 2.1 GPU-vec eval path
+        # (``backtest.run_episode_torch_vec``) is **correctness-equivalent** to
+        # the scalar path (drift < 0.001% on the real M5 test split, exact at
+        # CPU fp64; see ``scripts/_test_torch_eval_equiv.py``) but turned out
+        # to be **slower** in practice — single-seed eval ran 27.8s scalar vs
+        # 120.4s torch_vec; the ensemble of 8 was 195s vs 256s
+        # (``scripts/_bench_torch_vec_eval.py`` for the rerun script). Reason:
+        # TorchVecGoldEnv is built for batched lanes (num_envs >> 1); with
+        # num_envs=1 each step still pays the batched-tensor + kernel-launch
+        # overhead that the scalar GoldTradingEnv (pure NumPy float ops)
+        # skips. The grid keeps the scalar eval as the default path.
         env = make_env_from_frame(test_df, feat_cols, self.config.env, random_start=False)
-        hist = run_episode(model, env, deterministic=True)
+        bcfg = self.config.backtest
+        if bcfg.ter_gate_window > 0 and bcfg.ter_gate_threshold > 0:
+            hist = run_episode_ter_gated(
+                model, env,
+                ter_window=bcfg.ter_gate_window,
+                ter_threshold=bcfg.ter_gate_threshold,
+                deterministic=True,
+            )
+        else:
+            hist = run_episode(model, env, deterministic=True)
         rep = compute_report(hist["equity_curve"], hist["trades"], hist["initial_balance"],
                              bars_per_year=self._bars_per_year)
         return {"return_pct": rep.total_return_pct, "sharpe": rep.sharpe_ratio,

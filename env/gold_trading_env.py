@@ -350,6 +350,13 @@ class GoldTradingEnv(gym.Env):
         # Hard cap on number of entries per episode (0 = unlimited).
         if cfg.max_trades_per_episode and self._n_trades >= cfg.max_trades_per_episode:
             return False
+        # Regime gate (2026-05-28): suppress entries on quiet/range bars.
+        # ATR/close < threshold => low-volatility regime where H4 fold 0 lost.
+        # Causal — uses ATR at the current bar.
+        if cfg.min_trade_atr_pct > 0.0:
+            atr_pct = float(self._atr[self.current_step]) / max(mid_price, 1e-9)
+            if atr_pct < cfg.min_trade_atr_pct:
+                return False
 
         lots = self._compute_lot_size(mid_price)
         if lots <= 0:

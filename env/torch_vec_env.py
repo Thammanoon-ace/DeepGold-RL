@@ -23,7 +23,7 @@ not SB3 — it returns torch tensors, not numpy.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -33,7 +33,22 @@ from env.gold_trading_env import N_ACCOUNT_FEATURES, compute_atr_array
 
 
 class TorchVecGoldEnv:
-    """Batched, GPU-resident gold-trading env (torch tensors)."""
+    """Batched, GPU-resident gold-trading env (torch tensors).
+
+    Eval-mode extensions (Tier 2.1, 2026-05-28):
+
+    * ``auto_reset=False`` — for deterministic single-path evaluation, suppress
+      the automatic ``_reset_mask(done)`` in ``step()`` so the episode terminates
+      and the caller can read out the trajectory.
+    * ``track_history=True`` (requires ``num_envs == 1``) — record per-step
+      equity / reward / action and per-trade entry/exit/PnL on the host, so
+      ``get_episode_history()`` returns a dict compatible with the scalar env's
+      ``GoldTradingEnv.get_episode_history()``. Lets the backtester run a full
+      OOS pass on the GPU with no per-step CPU↔GPU round trip — replacing the
+      ensemble-eval bottleneck (~16 min/fold scalar → ~3 min/fold target).
+    * ``times`` — optional sequence of timestamps aligned to ``prices`` rows;
+      used to populate ``time_history`` and ``trades[].entry_time/exit_time``.
+    """
 
     def __init__(
         self,
@@ -45,6 +60,10 @@ class TorchVecGoldEnv:
         device: str = "cuda",
         dtype: torch.dtype = torch.float32,
         seed: Optional[int] = None,
+        *,
+        auto_reset: bool = True,
+        track_history: bool = False,
+        times: Optional[Sequence[Any]] = None,
     ) -> None:
         self.cfg = config
         self.device = torch.device(device if (device != "cuda" or torch.cuda.is_available()) else "cpu")
@@ -83,6 +102,25 @@ class TorchVecGoldEnv:
         self.bh_units, self._dsr_a, self._dsr_b = z(), z(), z()
         self.last_ep_returns = torch.zeros(0, device=dev)  # for logging
 
+        # ---- Eval-mode tracking (Tier 2.1) ------------------------------ #
+        self.auto_reset = bool(auto_reset)
+        self.track_history = bool(track_history)
+        if self.track_history and num_envs != 1:
+            raise ValueError("track_history requires num_envs == 1 (single eval path).")
+        self._times: Optional[List[Any]] = list(times) if times is not None else None
+        if self._times is not None and len(self._times) != self.n_bars:
+            raise ValueError(
+                f"times length {len(self._times)} != n_bars {self.n_bars}; pass the "
+                f"same row index as the prices array.")
+        # Per-step trajectory (filled in step()). Equity curve starts after reset().
+        self.equity_curve: List[float] = []
+        self.reward_history: List[float] = []
+        self.action_history: List[int] = []
+        self.time_history: List[Any] = []
+        self.trades: List[Dict[str, Any]] = []
+        # Per-lane open-trade record (eval-only, num_envs==1 so single dict is fine).
+        self._open_trade: Optional[Dict[str, Any]] = None
+
     # ------------------------------------------------------------------ #
     def _reset_mask(self, mask: torch.Tensor) -> None:
         k = int(mask.sum())
@@ -107,6 +145,15 @@ class TorchVecGoldEnv:
 
     def reset(self) -> torch.Tensor:
         self._reset_mask(torch.ones(self.num_envs, dtype=torch.bool, device=self.device))
+        if self.track_history:
+            # Trajectory restart. Seed equity_curve with the post-reset equity
+            # so the curve has len = n_steps + 1, matching the scalar env.
+            self.equity_curve = [float(self.equity[0].item())]
+            self.reward_history = []
+            self.action_history = []
+            self.time_history = [self._times[int(self.ptr[0].item())]] if self._times else []
+            self.trades = []
+            self._open_trade = None
         return self._obs()
 
     # ------------------------------------------------------------------ #
@@ -130,9 +177,30 @@ class TorchVecGoldEnv:
         ], dim=1)
         return torch.clamp(torch.cat([window, acct], dim=1), -10.0, 10.0)
 
-    def _realize(self, mask: torch.Tensor, exit_fill: torch.Tensor) -> None:
+    def _realize(self, mask: torch.Tensor, exit_fill: torch.Tensor,
+                 exit_reason: str = "unknown") -> None:
         cfg = self.cfg
         gross = (exit_fill - self.entry[mask]) * self.pos[mask].to(self.dtype) * self.lots[mask] * cfg.contract_size
+        # Emit trade record (eval-only; single lane). Capture PnL/return BEFORE
+        # we zero out pos/lots so the dict mirrors GoldTradingEnv's TradeRecord.
+        if self.track_history and bool(mask[0].item()) and self._open_trade is not None:
+            pnl = float(gross[0].item()) - 0.5 * cfg.commission_per_lot * float(self.lots[0].item())
+            init = cfg.initial_balance
+            exit_step = int(self.ptr[0].item())
+            entry_step = int(self._open_trade["entry_step"])
+            self.trades.append({
+                "entry_time": self._open_trade["entry_time"],
+                "exit_time": self._times[exit_step] if self._times else exit_step,
+                "entry_price": float(self._open_trade["entry_price"]),
+                "exit_price": float(exit_fill[0].item()),
+                "direction": int(self._open_trade["direction"]),
+                "lots": float(self._open_trade["lots"]),
+                "pnl": pnl,
+                "return_pct": pnl / max(init, 1e-9),
+                "bars_held": exit_step - entry_step,
+                "exit_reason": exit_reason,
+            })
+            self._open_trade = None
         self.balance[mask] += gross - 0.5 * cfg.commission_per_lot * self.lots[mask]
         self.pos[mask] = 0
         self.lots[mask] = 0.0
@@ -159,6 +227,13 @@ class TorchVecGoldEnv:
 
         open_dir = torch.where(a == 1, 1, torch.where(a == 2, -1, 0)).to(self.dtype)
         open_mask = ((a == 1) | (a == 2)) & flat & cooldown_ok & (lots > 0)
+        # Regime gate (2026-05-28): suppress new entries when ATR/close < threshold.
+        # Causal — uses ATR at the current bar (already computed at construction
+        # from past OHLC). Exits / SL / TP are untouched.
+        if cfg.min_trade_atr_pct > 0.0:
+            atr_now = self._atr[self.ptr]
+            atr_pct = atr_now / torch.clamp(price, min=1e-9)
+            open_mask = open_mask & (atr_pct >= cfg.min_trade_atr_pct)
         if open_mask.any():
             d = open_dir[open_mask]
             fill = price[open_mask] + d * self._adverse
@@ -173,10 +248,25 @@ class TorchVecGoldEnv:
             self.last_trade_step[open_mask] = self.ptr[open_mask]
             self.n_trades[open_mask] += 1
             opened[open_mask] = True
+            # Eval bookkeeping: capture the trade's entry context for the trade
+            # dict that will be emitted when _realize closes the position.
+            if self.track_history and bool(open_mask[0].item()):
+                entry_step = int(self.ptr[0].item())
+                self._open_trade = {
+                    "entry_step": entry_step,
+                    "entry_time": self._times[entry_step] if self._times else entry_step,
+                    "entry_price": float(fill[0].item()),
+                    "direction": int(d[0].item()),
+                    "lots": float(lt[0].item()),
+                }
 
         close_mask = (a == 3) & (self.pos != 0)
         if close_mask.any():
-            self._realize(close_mask, price[close_mask] - self.pos[close_mask].to(self.dtype) * self._adverse)
+            self._realize(
+                close_mask,
+                price[close_mask] - self.pos[close_mask].to(self.dtype) * self._adverse,
+                exit_reason="signal",
+            )
 
         # 2. Advance + resolve SL/TP.
         self.ptr += 1
@@ -188,9 +278,17 @@ class TorchVecGoldEnv:
         sl_mask = hit_sl
         tp_mask = hit_tp & ~hit_sl
         if sl_mask.any():
-            self._realize(sl_mask, self.sl[sl_mask] - self.pos[sl_mask].to(self.dtype) * self._adverse)
+            self._realize(
+                sl_mask,
+                self.sl[sl_mask] - self.pos[sl_mask].to(self.dtype) * self._adverse,
+                exit_reason="stop_loss",
+            )
         if tp_mask.any():
-            self._realize(tp_mask, self.tp[tp_mask] - self.pos[tp_mask].to(self.dtype) * self._adverse)
+            self._realize(
+                tp_mask,
+                self.tp[tp_mask] - self.pos[tp_mask].to(self.dtype) * self._adverse,
+                exit_reason="take_profit",
+            )
 
         # 3. Mark to market.
         next_close = self._close[self.ptr]
@@ -227,11 +325,44 @@ class TorchVecGoldEnv:
         done = terminated | truncated
         force = done & (self.pos != 0)
         if force.any():
-            self._realize(force, next_close[force] - self.pos[force].to(self.dtype) * self._adverse)
+            self._realize(
+                force,
+                next_close[force] - self.pos[force].to(self.dtype) * self._adverse,
+                exit_reason="force_close",
+            )
             self.equity[force] = self.balance[force]
         if done.any():
-            # Episode return (%) for logging, then auto-reset done lanes.
+            # Episode return (%) for logging.
             self.last_ep_returns = (self.equity[done] / cfg.initial_balance - 1.0) * 100.0
-            self._reset_mask(done)
+            if self.auto_reset:
+                self._reset_mask(done)
+
+        # Eval-mode trajectory capture (single lane, after force-close + equity
+        # update so the stored sample is the same one compute_report consumes).
+        if self.track_history:
+            self.equity_curve.append(float(self.equity[0].item()))
+            self.reward_history.append(float(reward[0].item()))
+            self.action_history.append(int(a[0].item()))
+            if self._times:
+                self.time_history.append(self._times[int(self.ptr[0].item())])
 
         return self._obs(), reward, done
+
+    # ------------------------------------------------------------------ #
+    def get_episode_history(self) -> Dict[str, Any]:
+        """Return the eval-mode trajectory as a dict matching the scalar env.
+
+        Only meaningful after a deterministic single-path run (track_history=True,
+        auto_reset=False, num_envs=1). The dict feeds ``compute_report`` and the
+        ensemble eval path identically to ``GoldTradingEnv.get_episode_history``.
+        """
+        return {
+            "equity_curve": np.asarray(self.equity_curve, dtype=float),
+            "timestamps": list(self.time_history),
+            "rewards": np.asarray(self.reward_history, dtype=float),
+            "actions": list(self.action_history),
+            "trades": list(self.trades),
+            "final_balance": float(self.balance[0].item()),
+            "final_equity": float(self.equity[0].item()),
+            "initial_balance": float(self.cfg.initial_balance),
+        }

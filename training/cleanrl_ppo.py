@@ -101,14 +101,23 @@ class ActorCritic(nn.Module):
     # --- SB3-compatible inference (for scalar-env evaluation) ---------- #
     @torch.no_grad()
     def _logits(self, observation) -> torch.Tensor:
-        dev = next(self.parameters()).device
-        obs = np.asarray(observation, dtype=np.float32)
-        t = torch.as_tensor(obs[None] if obs.ndim == 1 else obs, dtype=torch.float32, device=dev)
+        p = next(self.parameters())
+        dev, p_dtype = p.device, p.dtype
+        # Accept numpy arrays (scalar-env path) AND torch tensors (Tier 2.1
+        # GPU-resident eval path) — for the latter we skip the host round-trip.
+        if isinstance(observation, torch.Tensor):
+            t = observation if observation.ndim == 2 else observation.unsqueeze(0)
+            t = t.to(device=dev, dtype=p_dtype)
+        else:
+            obs = np.asarray(observation, dtype=np.float32)
+            t = torch.as_tensor(obs[None] if obs.ndim == 1 else obs,
+                                dtype=p_dtype, device=dev)
         return self.actor(self._features(t))
 
     @torch.no_grad()
     def predict(self, observation, deterministic: bool = True):
-        single = np.asarray(observation).ndim == 1
+        single = (observation.ndim == 1 if isinstance(observation, torch.Tensor)
+                  else np.asarray(observation).ndim == 1)
         logits = self._logits(observation)
         a = (logits.argmax(-1) if deterministic
              else torch.distributions.Categorical(logits=logits).sample())
@@ -123,6 +132,29 @@ class ActorCritic(nn.Module):
         agents the same way it averages SB3 agents (duck-typed there).
         """
         return torch.softmax(self._logits(observation), dim=-1).cpu().numpy()
+
+    @torch.no_grad()
+    def action_probs_torch(self, observation: torch.Tensor) -> torch.Tensor:
+        """GPU-resident counterpart of :meth:`action_probs` (Tier 2.1).
+
+        Accepts a torch tensor on any device, returns the (B, A) softmax tensor
+        on the model's device — no numpy round-trip. The GPU-vec eval loop and
+        :meth:`policies.ensemble.EnsemblePolicy.predict_torch` use this to keep
+        the whole inference path on the GPU.
+        """
+        return torch.softmax(self._logits(observation), dim=-1)
+
+    @torch.no_grad()
+    def predict_torch(self, observation: torch.Tensor) -> torch.Tensor:
+        """GPU-resident argmax counterpart of :meth:`predict` (Tier 2.1).
+
+        Duck-types with :meth:`policies.ensemble.EnsemblePolicy.predict_torch`
+        so ``backtest.run_episode_torch_vec`` can call either uniformly.
+        """
+        single = observation.ndim == 1
+        if single:
+            observation = observation.unsqueeze(0)
+        return self._logits(observation).argmax(dim=-1).to(torch.long)
 
 
 @dataclass
@@ -147,6 +179,10 @@ class PPOConfig:
     normalize_reward: bool = True       # match SB3 VecNormalize(norm_reward=True):
                                         # scale the small excess/dsr rewards so the
                                         # signal is large enough to learn from
+    compile: bool = False               # Tier 2.4: torch.compile the ActorCritic
+                                        # in 'reduce-overhead' mode (CUDA graphs).
+                                        # Off by default until the bench confirms a
+                                        # net speedup on this codebase.
 
 
 class _RewardNormalizer:
@@ -182,6 +218,10 @@ def train_cleanrl_ppo(env, arch: str = "cnn", ppo: Optional[PPOConfig] = None,
     dev = env.device
     torch.manual_seed(seed)
     ac = ActorCritic(env.obs_dim, env.window, env.n_features, arch=arch).to(dev)
+    if ppo.compile:
+        # torch.compile returns a wrapper that forwards attr access to the
+        # underlying module, so opt/state_dict/predict_torch still work.
+        ac = torch.compile(ac, mode="reduce-overhead")
     opt = torch.optim.Adam(ac.parameters(), lr=ppo.learning_rate, eps=1e-5)
 
     N, T = env.num_envs, ppo.n_steps

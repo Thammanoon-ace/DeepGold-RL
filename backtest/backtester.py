@@ -15,14 +15,15 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+import torch
 from stable_baselines3 import PPO
 
 from backtest.metrics import PerformanceReport, compute_report
-from config.config import Config
+from config.config import Config, EnvConfig
 from env.env_builder import TradingDataPipeline
 from env.gold_trading_env import GoldTradingEnv
 from utils import visualization as viz
@@ -43,6 +44,95 @@ def run_episode(model, env: GoldTradingEnv, deterministic: bool = True) -> Dict[
         action, _ = model.predict(obs, deterministic=deterministic)
         obs, _reward, terminated, truncated, _info = env.step(int(action))
         done = terminated or truncated
+    return env.get_episode_history()
+
+
+def compute_ter(close: np.ndarray, t: int, window: int) -> float:
+    """Trend Efficiency Ratio (causal) at bar ``t`` over the last ``window`` bars.
+
+    TER = abs(close[t] - close[t-window]) / sum(|close diffs| over last window).
+    Value in [0, 1]: 1 = perfect straight-line trend, ~0 = pure noise/chop.
+    Uses only bars up to and including ``t`` so it is leakage-safe.
+    """
+    if t < window:
+        return 0.0
+    w = close[t - window:t + 1]
+    net = abs(w[-1] - w[0])
+    s = float(np.sum(np.abs(np.diff(w))))
+    return float(net / max(s, 1e-9))
+
+
+def run_episode_ter_gated(model, env: GoldTradingEnv, ter_window: int,
+                          ter_threshold: float, deterministic: bool = True) -> Dict[str, Any]:
+    """Run a policy with a **post-hoc** Trend-Efficiency entry gate.
+
+    The trained policy is unchanged: it still predicts actions from the same
+    observations. We override only its **new-entry** outputs (BUY/SELL) when
+    the causal Trend Efficiency Ratio at the current bar is below
+    ``ter_threshold`` — i.e. when recent price action looks like chop more
+    than trend, force HOLD instead. Existing-position exits (signal close, SL,
+    TP) are untouched. This is the eval-time-only variant the [[regime-gate-
+    rejected]] post-mortem recommended after the env-level ATR gate failed.
+
+    Disabled (passes through to :func:`run_episode`) when ``ter_window == 0``
+    or ``ter_threshold <= 0``.
+    """
+    from env.gold_trading_env import ACTION_BUY, ACTION_HOLD, ACTION_SELL
+
+    if ter_window <= 0 or ter_threshold <= 0:
+        return run_episode(model, env, deterministic=deterministic)
+
+    close = np.asarray(env._close, dtype=float)
+    obs, _ = env.reset()
+    done = False
+    while not done:
+        action, _ = model.predict(obs, deterministic=deterministic)
+        action = int(action)
+        if action == ACTION_BUY or action == ACTION_SELL:
+            ter = compute_ter(close, env.current_step, ter_window)
+            if ter < ter_threshold:
+                action = ACTION_HOLD
+        obs, _reward, terminated, truncated, _info = env.step(action)
+        done = terminated or truncated
+    return env.get_episode_history()
+
+
+def run_episode_torch_vec(
+    policy,
+    features: np.ndarray,
+    prices: np.ndarray,
+    env_config: EnvConfig,
+    times: Optional[Sequence[Any]] = None,
+    device: str = "cuda",
+    dtype: torch.dtype = torch.float32,
+) -> Dict[str, Any]:
+    """GPU-resident counterpart of :func:`run_episode` (Tier 2.1).
+
+    Drives a deterministic single-path episode on :class:`TorchVecGoldEnv` with
+    ``num_envs=1``, ``auto_reset=False`` and ``track_history=True``. The policy
+    must expose ``predict_torch(obs_tensor) -> torch.LongTensor`` (both
+    :class:`training.cleanrl_ppo.ActorCritic` and
+    :class:`policies.ensemble.EnsemblePolicy` do); both keep the obs/action
+    round-trip on the GPU. The returned dict has the same keys as the scalar
+    env's ``get_episode_history`` so ``compute_report`` consumes it unchanged.
+
+    This replaces ~16-minute scalar ensemble evaluations in the big-seed grid
+    with a single GPU pass (5–6× speedup target, Tier 2.1 of NEW_HARDWARE_PLAN).
+    """
+    from env.torch_vec_env import TorchVecGoldEnv  # local import to avoid cycles
+
+    env = TorchVecGoldEnv(
+        features, prices, env_config,
+        num_envs=1, random_start=False,
+        device=device, dtype=dtype,
+        auto_reset=False, track_history=True, times=times,
+    )
+    obs = env.reset()
+    while True:
+        action = policy.predict_torch(obs)            # (1,) long, on GPU
+        obs, _reward, done = env.step(action)
+        if bool(done[0].item()):
+            break
     return env.get_episode_history()
 
 

@@ -34,7 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Bars per trading year by timeframe (24h sessions, ~252 trading days). Used to
 # annualize Sharpe/Sortino correctly when evaluating on different timeframes.
-BARS_PER_YEAR = {"M5": 288 * 252, "M15": 96 * 252, "H1": 24 * 252, "H4": 6 * 252}
+BARS_PER_YEAR = {"M5": 288 * 252, "M15": 96 * 252, "H1": 24 * 252, "H4": 6 * 252, "D1": 252}
 
 
 @dataclass
@@ -190,6 +190,16 @@ class EnvConfig:
     volatility_target_sizing: bool = False
     vol_target_risk_atr: float = 1.5
 
+    # ---- Regime gate (2026-05-28, follow-up to H4 verdict) ---------------- #
+    # When > 0, suppress BUY/SELL entries on bars whose ATR/close ratio is
+    # below this threshold. ATR/close is a simple range/trend proxy: low values
+    # indicate a quiet/range market where the H4 agent has been shown to break
+    # even or lose (fold 0 of excess_bigseed_32_h4) while making real money on
+    # trend folds. Hold actions and existing-position exits (SL/TP/signal
+    # close) are NOT gated — only new entries. Causal: uses ATR up to the
+    # current bar only. 0.0 = disabled (default, backward compatible).
+    min_trade_atr_pct: float = 0.0
+
 
 @dataclass
 class TrainingConfig:
@@ -258,6 +268,15 @@ class BacktestConfig:
     # Bars per year used to annualize Sharpe (M5 ~= 288 bars/day * 252 days).
     bars_per_year: int = 288 * 252
     save_plots: bool = True
+
+    # ---- Eval-time Trend-Efficiency entry gate (2026-05-28) ------------- #
+    # Post-hoc gate (does NOT affect training): at evaluation time, override
+    # BUY/SELL outputs with HOLD when the causal Trend Efficiency Ratio (TER)
+    # over the last `ter_gate_window` bars is below `ter_gate_threshold`.
+    # The trained policy and the env are unchanged — only the action stream
+    # observed at eval is filtered. Both fields default to 0 = gate disabled.
+    ter_gate_window: int = 0
+    ter_gate_threshold: float = 0.0
 
 
 @dataclass

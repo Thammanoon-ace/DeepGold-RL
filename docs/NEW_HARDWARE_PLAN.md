@@ -56,28 +56,50 @@ python scripts/grid_eval.py --engine gpu --policy-arch cnn --reward-mode excess 
 
 ## Tier 2 — ทำตามมา (medium effort, high value)
 
-### 2.1 Vectorize eval (กำจัด bottleneck ที่แท้จริง)
-ปัจจุบันตอน eval/ensemble ใช้ scalar env + Python loop ทีละ bar = CPU sequential, GPU ช่วยไม่ได้
-**ทางแก้:** เขียน `evaluate_torch_vec()` ที่ใช้ `TorchVecGoldEnv` num_envs=1 รัน full test fold บน GPU
+### 2.1 ~~Vectorize eval~~ **ATTEMPTED & REJECTED (2026-05-28)** — slower
 
-จุดที่ต้องแก้:
-- เพิ่ม method `run_episode_torch_vec()` ใน [backtest/backtester.py](../backtest/backtester.py)
-- ใน [validation/grid.py](../validation/grid.py) `_evaluate()` สลับมาใช้ตัวใหม่เมื่อ engine="gpu"
-- **ระวัง:** ผลต้องเทียบได้กับ scalar env (เลย equivalence test แล้ว ~1e-7 → ปลอดภัย)
+**Implementation:** [backtest/backtester.py](../backtest/backtester.py) `run_episode_torch_vec()`,
+[env/torch_vec_env.py](../env/torch_vec_env.py) `auto_reset` / `track_history`
+flags + trade-lifecycle tracking, [training/cleanrl_ppo.py](../training/cleanrl_ppo.py)
+`ActorCritic.predict_torch`/`action_probs_torch`,
+[policies/ensemble.py](../policies/ensemble.py) `EnsemblePolicy.predict_torch`.
+Equivalence test ([scripts/_test_torch_eval_equiv.py](../scripts/_test_torch_eval_equiv.py))
+shows **exact match** with scalar env at CPU fp64 / < 0.001 % drift at CUDA fp32
+across `absolute` / `excess` / `dsr` reward modes.
 
-**คาดหวัง:** Ensemble eval 28 นาที/fold → ~5 นาที/fold (5–6x) → big-seed run ตัดเหลือ ~45 นาที
+**Bench result ([scripts/_bench_torch_vec_eval.py](../scripts/_bench_torch_vec_eval.py)):**
 
-### 2.2 รัน grid หลายตัวขนาน
-RTX 5070 12GB + 10 cores → รัน 2–3 grid experiments พร้อมกันได้
+| Test split (70 847 bars) | scalar | torch_vec | speedup | drift |
+|---|---|---|---|---|
+| Single-seed eval | 27.8 s | **120.4 s** | **0.2×** (5× slower) | 0.0009 % |
+| Ensemble K=8 eval | 195.5 s | 256.2 s | 0.8× | 0.0001 % |
 
-```bash
-# Terminal 1
-python scripts/grid_eval.py --engine gpu --reward-mode excess ... --tag excess_v1 &
-# Terminal 2 (CUDA_VISIBLE_DEVICES=0 + memory partition)
-python scripts/grid_eval.py --engine gpu --reward-mode absolute ... --tag abs_v1 &
-```
+**Why it failed:** `TorchVecGoldEnv` is built for **batched** lanes (num_envs ≫ 1).
+With `num_envs=1` each step still pays the per-tensor and kernel-launch overhead
+that the scalar `GoldTradingEnv` (NumPy float ops) skips entirely. The GPU is
+underutilized in batched training (Tier 1.2 finding) **and** in single-lane eval —
+the bottleneck has been Python overhead vs. the cost of the work being done,
+not host↔device transfers as the plan assumed.
 
-ใช้ `torch.cuda.set_per_process_memory_fraction(0.4)` แบ่ง VRAM
+**Status:** Code path kept (correctness verified) but `validation/grid.py`
+`_evaluate()` reverted to the scalar path. If a future ensemble-batching design
+arrives (one batched forward over K stacked actor weights per step) this
+plumbing is the foundation for it.
+
+**Skip Tier 2.1 in future plans.** The realistic speedup levers for the
+ensemble-eval bottleneck remain Tier 2.4 (torch.compile) and Tier 3.4 (CUDA
+graphs).
+
+### 2.2 ~~รัน grid หลายตัวขนาน~~ **REJECTED (2026-05-28)**
+
+Bench: sequential 2 small grids = **756 s**, parallel 2 = **906 s** = **1.20× slower**.
+
+GPU contention (sat at 89 % util mid-run) and CPU scalar-eval competition more
+than negate the wall-clock parallelism. Combined with Tier 1.2's finding that
+the GPU is already underused at one grid, splitting it across two does not
+free up unused capacity — it just creates contention.
+
+Don't propose parallel grids for this codebase. Stack experiments serially.
 
 ### 2.3 Hyperparameter sweep ที่ของเดิมทำไม่ไหว
 ```bash
@@ -91,12 +113,37 @@ done
 
 ทำ heatmap (seed-ensemble robustness) ดู basin ที่ดีที่สุด — ระวัง overfit-to-grid ใช้ held-out fold ทดสอบสุดท้าย
 
-### 2.4 torch.compile บน ActorCritic
-```python
-# ใน train_cleanrl_ppo() หลัง init
-ac = torch.compile(ac, mode="reduce-overhead")
-```
-คาดหวัง 1.5–2x training speedup โดยไม่ต้อง rewrite อะไร (cuda 12.x + torch 2.4+ stable แล้ว)
+### 2.4 torch.compile บน ActorCritic — **PARTIAL WIN (2026-05-28)**
+
+**Implementation:** [training/cleanrl_ppo.py](../training/cleanrl_ppo.py) `PPOConfig.compile`
++ [scripts/train_cleanrl.py](../scripts/train_cleanrl.py) `--compile`. Wraps
+`ActorCritic` with `torch.compile(mode="reduce-overhead")` after init.
+
+**Bench result ([scripts/_bench_compile.py](../scripts/_bench_compile.py)) —
+16k lanes × 5 updates × 64 n_steps = 5.24M env-steps:**
+
+| | env-steps/s | wall-clock |
+|---|---|---|
+| baseline (no compile) | 55,908 | 93.8 s |
+| torch.compile (reduce-overhead) | 59,951 | 87.5 s |
+| **Speedup** | **1.07×** | — |
+
+Far below the 1.5–2× expectation:
+1. **Triton not installed on Windows** → inductor falls back to the C++ codegen
+   path; kernel quality is lower than Triton would give.
+2. Per Tier 1.2 the GPU is already 32–45 % utilised — compile only cuts the
+   Python/launch overhead, which is **not** the dominant cost (the underused
+   GPU is). So compile cannot recover what isn't being spent.
+3. The `ActorCritic` is small (~50 k params); compile graph-build cost
+   (~5–10 s one-off) is a large fraction of any short training run.
+
+**Implication for grid_eval:** each grid cell trains for ~30 s. A 5–10 s
+compile-overhead per cell would **net-slow** the grid. Do not wire `compile`
+into `validation/grid.py`.
+
+**Status:** Flag kept (`PPOConfig.compile`, `--compile`) for one-off long
+training runs where amortising graph build is worth the 7 %. Not the default,
+not used by the grid.
 
 ---
 

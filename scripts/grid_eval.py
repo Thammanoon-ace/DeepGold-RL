@@ -41,7 +41,7 @@ def main() -> None:
                         "TorchVecGoldEnv + CleanRL PPO (cnn/mlp only). Eval is identical.")
     p.add_argument("--n-steps", type=int, default=128,
                    help="Rollout length per PPO update (gpu engine).")
-    p.add_argument("--timeframe", default=None, choices=["M5", "M15", "H1", "H4"],
+    p.add_argument("--timeframe", default=None, choices=["M5", "M15", "H1", "H4", "D1"],
                    help="Resample the native CSV to this timeframe (Phase 5F). "
                         "Default = use the CSV as-is.")
     p.add_argument("--no-ensemble", action="store_true")
@@ -56,6 +56,15 @@ def main() -> None:
                    choices=["trend", "momentum", "volatility", "candle", "structure", "volume"])
     p.add_argument("--correlation", type=float, default=None)
     p.add_argument("--tag", default="grid", help="Output subdir tag.")
+    p.add_argument("--min-trade-atr-pct", type=float, default=None,
+                   help="Regime gate: block new entries when ATR/close < this. "
+                        "Causal. 0.0 disables. Suggested H4 starting point: 0.004 "
+                        "(blocks ~25% lowest-volatility bars).")
+    p.add_argument("--ter-gate-window", type=int, default=None,
+                   help="Eval-time Trend-Efficiency gate window (bars). 0 = disabled.")
+    p.add_argument("--ter-gate-threshold", type=float, default=None,
+                   help="Eval-time TER threshold; override new entries with HOLD "
+                        "when TER < threshold. 0.0 = disabled.")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -72,6 +81,12 @@ def main() -> None:
         cfg.env.reward_mode = args.reward_mode
     if args.regime:
         cfg.features.use_regime_features = True
+    if args.min_trade_atr_pct is not None:
+        cfg.env.min_trade_atr_pct = args.min_trade_atr_pct
+    if args.ter_gate_window is not None:
+        cfg.backtest.ter_gate_window = args.ter_gate_window
+    if args.ter_gate_threshold is not None:
+        cfg.backtest.ter_gate_threshold = args.ter_gate_threshold
     cfg.paths.ensure()
 
     splitter = TimeSeriesSplitter(n_splits=args.folds, mode="expanding", gap=cfg.env.window_size)

@@ -36,7 +36,7 @@ _COLUMN_ALIASES = {
 }
 
 # Pandas offset aliases for the timeframes we support.
-_TIMEFRAME_TO_OFFSET = {"M5": "5min", "M15": "15min", "H1": "1h"}
+_TIMEFRAME_TO_OFFSET = {"M5": "5min", "M15": "15min", "H1": "1h", "H4": "4h", "D1": "1D"}
 
 
 class HistoricalDataLoader:

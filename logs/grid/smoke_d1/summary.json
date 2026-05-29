@@ -1,0 +1,24 @@
+{
+  "policy_arch": "cnn",
+  "feature_groups": [],
+  "baseline_buy_hold_pct": 118.85597305552112,
+  "single": {
+    "n_cells": 1,
+    "median": 78.51278359999905,
+    "mean": 78.51278359999905,
+    "std": 0.0,
+    "iqr": 0.0,
+    "p10": 78.51278359999905,
+    "p90": 78.51278359999905,
+    "worst": 78.51278359999905,
+    "best": 78.51278359999905,
+    "pct_positive": 100.0,
+    "robustness_score": 91.01278359999905,
+    "vs_baseline_winrate": 0.0
+  },
+  "ensemble": null,
+  "median_ci": [
+    78.51278359999905,
+    78.51278359999905
+  ]
+}

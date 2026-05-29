@@ -103,6 +103,42 @@ class EnsemblePolicy:
         return (int(actions[0]) if single else actions), None
 
     # ------------------------------------------------------------------ #
+    def _mean_probs_torch(self, obs_t: torch.Tensor) -> torch.Tensor:
+        """GPU-resident counterpart of :meth:`_mean_probs` (Tier 2.1).
+
+        All members must expose ``action_probs_torch`` (currently only the
+        CleanRL :class:`ActorCritic`). Raises ``TypeError`` if a member only
+        has the numpy ``action_probs`` — the caller should fall back to the
+        scalar-env path for that ensemble.
+        """
+        probs = None
+        for m in self.models:
+            if not hasattr(m, "action_probs_torch"):
+                raise TypeError(
+                    f"EnsemblePolicy.predict_torch requires every member to expose "
+                    f"action_probs_torch (CleanRL ActorCritic); got {type(m).__name__}.")
+            p = m.action_probs_torch(obs_t)
+            probs = p if probs is None else probs + p
+        return probs / len(self.models)
+
+    def predict_torch(self, obs_t: torch.Tensor) -> torch.Tensor:
+        """GPU-resident :meth:`predict` for the vectorized-eval path.
+
+        Input shape ``(B, obs_dim)`` (or ``(obs_dim,)``); returns a 1-D
+        ``torch.long`` action tensor on the model's device — no CPU sync.
+        """
+        single = obs_t.ndim == 1
+        if single:
+            obs_t = obs_t.unsqueeze(0)
+        mean_p = self._mean_probs_torch(obs_t)     # (B, A) on GPU
+        actions = mean_p.argmax(dim=1)
+        if self.tau > 0:
+            top = mean_p.max(dim=1).values
+            hold = torch.full_like(actions, ACTION_HOLD)
+            actions = torch.where(top >= self.tau, actions, hold)
+        return actions.to(torch.long)
+
+    # ------------------------------------------------------------------ #
     def agreement(self, observation: np.ndarray) -> float:
         """Fraction of members agreeing with the ensemble action (diagnostic).
 

@@ -66,6 +66,8 @@ def main() -> None:
     p.add_argument("--reward-mode", default=None, choices=["absolute", "excess", "dsr"])
     p.add_argument("--lr", type=float, default=3.0e-4)
     p.add_argument("--log-every", type=int, default=10, help="Updates between log lines (0=off).")
+    p.add_argument("--compile", action="store_true",
+                   help="torch.compile the ActorCritic (reduce-overhead mode). Tier 2.4.")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -91,7 +93,8 @@ def main() -> None:
     # ---- GPU-resident env + GPU-native PPO ------------------------------ #
     env = TorchVecGoldEnv(features, prices, cfg.env, num_envs=args.num_envs,
                           random_start=True, device=device, dtype=torch.float32, seed=args.seed)
-    ppo = PPOConfig(total_timesteps=args.timesteps, n_steps=args.n_steps, learning_rate=args.lr)
+    ppo = PPOConfig(total_timesteps=args.timesteps, n_steps=args.n_steps,
+                    learning_rate=args.lr, compile=args.compile)
 
     # Actual env interactions = full updates x batch (the loop floors
     # total_timesteps to whole updates of num_envs*n_steps).
