@@ -665,3 +665,278 @@ of top-seed selection. The unfiltered policy + ensemble averaging remains
 the optimal aggregator.
 
 Artifacts: `logs/grid/excess_bigseed_32_h4_ter_w50_t010/{summary.json, cells.csv, ensemble_cells.csv}`.
+
+### 15.13 D1 big-seed run — monotone trend broken, H4 confirmed as sweet spot (2026-05-30)
+Same protocol as §15.8–§15.12 (32 seeds × 4 folds × 1.31M timesteps, excess
+reward, GPU CleanRL engine), only `--timeframe D1`. Required adding `D1 ->
+1D` to `_TIMEFRAME_TO_OFFSET` and `BARS_PER_YEAR["D1"]=252`. Tag:
+`excess_bigseed_32_d1`. Wall-clock ~62 min.
+
+| | n cells | median | std | %pos | beats BH | robustness | **CI 95 % (median)** |
+|---|---|---|---|---|---|---|---|
+| single-seed | 128 | **−7.07 %** | 17.50 | 30 % | **3.9 %** | −61.5 | **[−9.0, −5.1] EXCLUDES 0 on the NEGATIVE side** |
+| ensemble (32 seeds/fold) | 4 | −10.92 % | 9.35 | 25 % | **0 %** | −46.0 | — |
+
+Buy-and-hold mean over folds: **+26.2 %**.
+
+**The monotone M5 → H1 → H4 trend does not continue. D1 reverses it:**
+
+| timeframe | bars (full series) | single CI | ensemble median | beats BH | robustness |
+|---|---|---|---|---|---|
+| M5 (§15.8) | 425 k | [−3.7, +5.5] straddles 0 | +1.8 % | 0 % | +7.7 |
+| H1 (§15.9) | 36 k | [+3.6, +10.3] excludes 0 (positive) | +3.3 % | 0 % | −7.3 |
+| **H4 (§15.10)** | 9 k | **[+3.2, +10.9] excludes 0 (positive)** | **+16.7 %** | **25 %** | **+12.9** |
+| **D1 (§15.13)** | 2 k | **[−9.0, −5.1] excludes 0 (NEGATIVE)** | **−10.9 %** | **0 %** | **−46.0** |
+
+**Per-fold ensemble — note fold 3 (the strong-trend fold) flips sign:**
+
+| fold | regime | H4 ensemble | D1 ensemble | Δ |
+|---|---|---|---|---|
+| 0 | range | −2.2 % | +1.7 % | +3.9 |
+| 1 | mild trend | +13.4 % | −12.1 % | −25.5 |
+| 2 | trend | +19.9 % | −9.8 % | −29.7 |
+| 3 | strong trend | **+41.3 %** | **−24.7 %** | **−66.0** |
+
+**Interpretation:**
+- D1 is too coarse for an RL agent with this architecture and data. There are
+  only ~250 decision points per test fold (vs ~1,500 at H4); a bad early entry
+  can't be recovered. Many seeds hit the 40 % max-drawdown floor before the
+  episode ends.
+- The fact that the CI **significantly excludes 0 on the negative side** is
+  itself a clean scientific result: at D1 the agent is reliably **worse** than
+  doing nothing, not noisy around 0.
+- **H4 is the sweet spot.** The hypothesis "edge grows monotonically with
+  timeframe" from §15.10's open questions is now answered: NO, it peaks
+  somewhere around H4 (between H1 and D1).
+
+**Open questions advanced:**
+1. Is the H4 peak gold-specific, or is "around 4 hours" the right granularity
+   for retail-data RL on any liquid asset? Multi-instrument H4 (EURUSD H4,
+   BTC H4, SPX H4) is still untested.
+2. Within H4, can a **top-k seed selector** (rank seeds by training-fold
+   Sharpe or by a held-out validation fold, then ensemble only the top-k)
+   capitalise on §15.12's finding that TER-gated single seeds have project-
+   best per-cell CI [+5.7, +18.5] even though the 32-seed average loses to
+   the unfiltered baseline?
+3. Is daily TOO coarse, or is the issue specifically about decision count?
+   H2 or H3 (not currently supported by the resampler) would interpolate
+   between H1 (no edge over BH) and H4 (peak).
+
+Artifacts: `logs/grid/excess_bigseed_32_d1/{summary.json, cells.csv, ensemble_cells.csv}`.
+
+### 15.14 Top-k seed selector — oracle ceiling (2026-05-30)
+Post-hoc analysis with [scripts/_topk_analysis.py](../scripts/_topk_analysis.py):
+for each fold, sort 32 seeds by a test-fold metric and average the per-seed
+returns of the top-k. This is a *portfolio-of-K-independent-agents* analysis
+(each agent gets 1/K capital), distinct from the policy-averaging
+EnsemblePolicy. Numbers below use **Sharpe** as the ranker (return-based
+ranker gives nearly identical results).
+
+| grid | all-32 mean | top-16 | top-8 | **top-4** | top-1 |
+|---|---|---|---|---|---|
+| M5 (§15.8) | +3.3 % | +22.8 % | +37.8 % | +51.3 % | +87.3 % |
+| H1 (§15.9) | +9.7 % | +22.2 % | +28.4 % | +31.5 % | +33.3 % |
+| **H4 (§15.10)** | +11.3 % | +26.9 % | +36.9 % | **+46.8 %** | +61.6 % |
+| H4 + TER (§15.12) | +16.2 % | +30.1 % | +39.1 % | +46.2 % | +55.7 % |
+| D1 (§15.13) | **−6.4 %** | +5.8 % | **+14.7 %** | +23.4 % | +36.4 % |
+
+**Headline finding:** picking the top-4/8 seeds (out of 32) by Sharpe lifts
+every grid by 20-50 pp over the unfiltered mean. **D1 ensemble's −11 % flips
+to +15 % at top-8**, and **H4 top-4 (Sharpe) hits +46.8 %**, beating BH
+(+25.9 %) by 21 pp.
+
+**Sanity:** the bottom-4 averaged gives −13 to −30 % on every grid — far worse
+than top-4. The ranking ordering definitely carries signal.
+
+**Critical caveat — this is leakage.** All numbers above used the *test* fold's
+Sharpe as the ranker. They are an **upper bound** on what a non-leaking top-k
+aggregator could achieve. Operationalizing this requires a ranker that uses
+only training-time information:
+
+1. **Easiest non-leaking ranker:** the last-50 training-episode Sharpe inside
+   [training/cleanrl_ppo.py::train_cleanrl_ppo](../training/cleanrl_ppo.py).
+   `ep_returns` is already tracked; convert to Sharpe and surface per-cell.
+2. **More principled:** add a held-out validation slice (e.g. last 20 % of the
+   train_df) and rank seeds by deterministic validation performance.
+
+**Order-of-magnitude estimate of recovery:** a noisy non-leaking ranker that
+captures even half of the oracle gap on H4 would lift the ensemble from
++18.1 % to ~+30 %, beating BH (+25.9 %) by ~4 pp on average. The H4 baseline
+already beats BH on the strong-trend fold; recovering even a fraction of the
+oracle ceiling would push the ensemble into "tradeable" territory on more
+than just one fold per year.
+
+**Open questions advanced:**
+1. **Does a training-Sharpe ranker recover most of the oracle gap, or does
+   training-time performance not correlate strongly enough with test-time
+   performance to be useful?** Untested. This is the top remaining experiment.
+2. Does the oracle finding generalize to other instruments? Same multi-
+   instrument open question as §15.13 — not gold-specific is the hope.
+
+Artifacts: oracle analysis printed by `scripts/_topk_analysis.py` (no CSV
+written; reproducible by running the script).
+
+### 15.15 Top-k by train-Sharpe ranker — FAILED (2026-05-30)
+The non-leaking ranker proposed in §15.14: track per-cell Sharpe of the
+last-50 training-episode returns inside `train_cleanrl_ppo`, surface in
+`cells.csv` via `grid.py`, then rank seeds by that train_sharpe instead of
+test return/Sharpe. Implementation: `_train_sharpe` attribute on the
+`ActorCritic` in [training/cleanrl_ppo.py](../training/cleanrl_ppo.py) and
+`train_sharpe` column in [validation/grid.py](../validation/grid.py).
+Re-ran the H4 grid (32 seeds × 4 folds × 1.31M timesteps, tag
+`excess_bigseed_32_h4_ts`, ~64 min).
+
+**Correlation between train_sharpe and test metrics (per fold):**
+
+| fold | ρ(train_sharpe, test_return) | ρ(train_sharpe, test_sharpe) |
+|---|---|---|
+| 0 | −0.140 | −0.152 |
+| 1 | −0.154 | −0.157 |
+| 2 | **−0.367** | −0.339 |
+| 3 | +0.211 | +0.069 |
+| mean | **−0.113** | **−0.145** |
+
+**train_sharpe anti-correlates with test return on 3 of 4 folds.** The signal
+is *opposite* of the one we hoped for. High train Sharpe = overfitting the
+training distribution; OOS test performance is reliably worse.
+
+**Top-k results, this grid (mean over folds, %):**
+
+| k | by **train_sharpe** | by oracle (test sharpe) | "recovery" |
+|---|---|---|---|
+| 1 | +25.0 (high-variance outlier) | +45.6 | — |
+| **4** | **+10.6** | **+44.5** | **24 %** ← worse than all-32 |
+| 8 | +13.3 | +35.9 | 37 % |
+| 16 | +12.3 | +27.1 | 45 % |
+| 32 (all) | +12.4 | +12.4 | — |
+
+**Picking top-4 by train_sharpe gives +10.6 %, worse than the all-32 mean of
++12.4 %.** The ranker is counterproductive — it specifically selects seeds
+that overfit, then those seeds underperform OOS.
+
+**Implication for §15.14's oracle:** the +46.8 % oracle ceiling at H4 top-4
+is real but unreachable by training-set Sharpe. The signal that distinguishes
+good seeds from overfitting seeds is not present in the training metric.
+
+**Non-leaking ranker direction is still open, but barely:**
+1. **Held-out validation slice** — split each fold's train data into ~80 %
+   training + ~20 % validation, deterministic eval on the validation slice,
+   rank by validation Sharpe. Cleanest known alternative. Requires ~30 min
+   code + ~70 min grid rerun. If even validation Sharpe anti-correlates, the
+   top-k lever is fully closed.
+2. **Multi-feature learned ranker** (train_sharpe + ep_return_mean +
+   ep_return_std + others) — only 128 samples; barely above noise.
+3. **Stop top-k**, accept H4 baseline (§15.10) as the project's best
+   tradeable ensemble, and move to multi-instrument H4 to test
+   generalization.
+
+**This run's full-32 ensemble vs §15.10 baseline:**
+- ensemble median: **+18.1 %** (baseline +16.7 %) — slight gain from CUDA
+  non-determinism, not from the ranker
+- ensemble robustness: **+23.4** (baseline +12.9) — higher by coincidence
+- single CI: [+3.7, +12.4] (baseline [+3.2, +10.9]) — tighter
+- beats BH: 25 % (same as baseline)
+
+Variation between H4 runs is ~2-5 pp per fold from CUDA non-determinism;
+none of this run's improvement vs baseline H4 attributes to the ranker.
+
+**Status of the §15.10 conclusion: confirmed.** The H4 baseline ensemble
+(no gate, no ranker) is the project's best operational result. The oracle
+top-k ceiling is informative but unreachable; the variance-amplification
+gates and the train-Sharpe ranker have all underperformed it.
+
+Artifacts: `logs/grid/excess_bigseed_32_h4_ts/{summary.json, cells.csv,
+ensemble_cells.csv}`. cells.csv now includes the `train_sharpe` column.
+
+### 15.16 Top-k by held-out validation Sharpe — also FAILED (2026-05-30)
+Follow-up to §15.15: build a non-leaking ranker by splitting each fold's
+training data into the first 80 % (used for training and to fit the
+normalizer) and the last 20 % (a held-out validation slice the agent never
+sees during training). After training, run a deterministic eval on the
+validation slice; the resulting Sharpe is the new ranker. Implementation:
+`GridEvaluator(val_frac=0.2)` + `--val-frac 0.2` flag + validation eval in
+[validation/grid.py::run](../validation/grid.py). Tag:
+`excess_bigseed_32_h4_val20`. Wall-clock ~64 min.
+
+**val_sharpe correlation with test_return (signal direction):**
+
+| fold | ρ(val_sharpe, test_return) |
+|---|---|
+| 0 | +0.152 |
+| 1 | +0.016 |
+| 2 | **+0.395** |
+| 3 | −0.182 |
+| mean | **+0.095** |
+
+Compared to §15.15's train_sharpe (mean ρ = −0.113): **val_sharpe is correctly
+oriented** — picking top-k by val_sharpe is meaningfully better than picking
+randomly or by train_sharpe. But the signal is weak.
+
+**Top-k results on this run (80 % train + ranker):**
+
+| k | by val_sharpe | by oracle (test sharpe) | recovery |
+|---|---|---|---|
+| 1 | −1.83 % | +39.56 % | 0 % |
+| **4** | **+1.92 %** | +27.54 % | 17 % |
+| 8 | +1.69 % | +19.10 % | 22 % |
+| 16 | −1.87 % | +9.68 % | 30 % |
+| 32 | −3.40 % | −3.40 % | — |
+
+Top-4 by val_sharpe beats the unfiltered 32-seed mean (+1.92 % vs −3.40 % on
+this run, a +5.3 pp lift). The ranker works directionally.
+
+**But the 80 %-train cost destroys the comparison vs §15.10:**
+
+| fold | 80 % train | 100 % train | Δ |
+|---|---|---|---|
+| 0 | −14.3 % | −2.2 % | −12.2 |
+| 1 | +28.1 % | +13.4 % | +14.7 |
+| 2 | −7.6 % | +19.9 % | −27.5 |
+| **3** | **−15.9 %** | **+41.3 %** | **−57.2** |
+| ensemble mean | **−2.4 %** | **+18.1 %** | **−20.5** |
+
+The strong-trend fold (fold 3) collapses from +41 % to −16 % because the
+agent loses 20 % of its training data — exactly the bars at the end of the
+training distribution that would have prepared it for the 2025 trend.
+
+**Net comparison (the question that actually matters):**
+
+| | top-4 / val_sharpe (80 % train) | all-32 baseline (100 % train) |
+|---|---|---|
+| ensemble mean return | +1.92 % | **+18.1 %** |
+| beats BH? | no (BH +25.9 %) | no but closer |
+| CI on single | [−10.1, −0.3] excludes 0 negative | [+3.2, +10.9] excludes 0 positive |
+
+Even the best-ranked subset on the data-restricted run loses by 16 pp to
+the unfiltered 100 %-train baseline.
+
+**Why both top-k rankers fail:**
+1. **train_sharpe (§15.15):** correlates the *wrong way* — high train Sharpe
+   marks overfitters that underperform OOS. Net: top-4 by train_sharpe is
+   worse than the all-32 mean.
+2. **val_sharpe (§15.16):** correlates the right way (mean ρ = +0.095) but
+   too weakly to overcome the −20 pp data-loss tax from training on 80 %.
+
+The §15.14 oracle ceiling (H4 top-4 by *test* sharpe = +46.8 %) is therefore
+**real but unreachable** from any non-leaking signal we can compute on-the-fly.
+Both top-k experiments have been clean implementations and both have been
+clean negatives.
+
+**Status of the §15.10 conclusion: re-confirmed.** The H4 baseline ensemble
+(100 % train, no gate, no ranker, no validation slice) remains the project's
+best operational result. The top-k lever is closed.
+
+**Productive remaining directions:**
+- **Multi-instrument H4** — does the §15.10 H4 sweet spot generalize off
+  gold (EURUSD H4, BTC H4, SPX H4)? Still untested. Cleanest open question.
+- **ROADMAP V3.5 variance reduction levers** that this session deferred while
+  top-k was the candidate: cosine LR schedule, SWA, target_kl tuning,
+  longer training (1.3M → 5M steps to push past noise floor).
+- **Stop and write up.** §15.8–§15.16 form a coherent set: H4 sweet spot
+  positive on robustness + sharpe + per-fold-beats-BH; M5/D1 not significant
+  or significantly negative; gates and rankers tested + rejected; oracle
+  ceiling characterized; cleanly tradeable agent not achieved.
+
+Artifacts: `logs/grid/excess_bigseed_32_h4_val20/{summary.json, cells.csv,
+ensemble_cells.csv}`. cells.csv includes `train_sharpe`, `val_sharpe`,
+`val_return_pct`.

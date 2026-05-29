@@ -103,6 +103,7 @@ class GridEvaluator:
         tensorboard: bool = True,
         engine: str = "sb3",
         gpu_n_steps: int = 128,
+        val_frac: float = 0.0,
     ) -> None:
         self.config = config
         self.seeds = list(seeds)
@@ -120,6 +121,13 @@ class GridEvaluator:
         self.num_envs = num_envs
         self.normalizer_method = normalizer_method
         self.evaluate_ensemble = evaluate_ensemble
+        # Held-out validation slice for non-leaking seed ranking (top-k experiment).
+        # When > 0, the last ``val_frac`` of each fold's training data is held out:
+        # the agent trains on the first ``1 - val_frac`` only, the normalizer is
+        # fit on the training slice only (no val leakage), and a deterministic
+        # eval on the validation slice produces a ``val_sharpe`` column in
+        # cells.csv. Rank seeds by val_sharpe and ensemble top-k. 0.0 = disabled.
+        self.val_frac = float(val_frac)
         # Phase 5F: resample the native (M5) CSV to a higher timeframe (e.g. H1)
         # before feature engineering — to test the "M5 is too noisy" hypothesis.
         self.resample_to = resample_to
@@ -234,8 +242,21 @@ class GridEvaluator:
         thr = self.config.features.correlation_threshold
 
         for fold in folds:
-            train_raw = featured.iloc[fold.train_start:fold.train_end]
+            train_raw_full = featured.iloc[fold.train_start:fold.train_end]
             test_raw = featured.iloc[fold.test_start:fold.test_end]
+
+            # Held-out validation split: hold out the LAST val_frac of each
+            # fold's training data and fit the normalizer on the earlier slice
+            # only. The agent never sees the validation slice during training;
+            # its deterministic return there is a leakage-free predictor of
+            # test performance (for the [[topk-ranker]] experiment).
+            if self.val_frac > 0:
+                split_pt = max(1, int((1 - self.val_frac) * len(train_raw_full)))
+                train_raw = train_raw_full.iloc[:split_pt]
+                val_raw = train_raw_full.iloc[split_pt:]
+            else:
+                train_raw = train_raw_full
+                val_raw = None
 
             fold_cols = self.feature_columns
             if thr and thr > 0:
@@ -246,6 +267,7 @@ class GridEvaluator:
             normalizer = FeatureNormalizer(fold_cols, self.normalizer_method)
             train_df = normalizer.fit_transform(train_raw)
             test_df = normalizer.transform(test_raw)
+            val_df = normalizer.transform(val_raw) if val_raw is not None else None
             baseline_bh.append(buy_and_hold_return(test_raw["close"].to_numpy())["total_return_pct"])
 
             seed_models = []
@@ -257,7 +279,24 @@ class GridEvaluator:
                     tb_name = f"{self.run_tag}_{tf}_{self.config.training.policy_arch}_f{fold.index}_s{seed}"
                     model = self._train(train_df, fold_cols, seed, tb_name=tb_name)
                 m = self._evaluate(model, test_df, fold_cols)
-                cells.append({"fold": fold.index, "seed": seed, **m})
+                # Surface training-time Sharpe when available (gpu engine only)
+                # so cells.csv can rank seeds *without test leakage*.
+                train_sharpe = float(getattr(model, "_train_sharpe", float("nan")))
+                # Held-out validation Sharpe: deterministic eval on a slice the
+                # agent never trained on. Non-leaking predictor of test perf
+                # ([[held-out-val-ranker]] experiment, follow-up to
+                # [[train-sharpe-ranker-failed]]).
+                if val_df is not None:
+                    vm = self._evaluate(model, val_df, fold_cols)
+                    val_sharpe = float(vm["sharpe"])
+                    val_return = float(vm["return_pct"])
+                else:
+                    val_sharpe = float("nan")
+                    val_return = float("nan")
+                cells.append({"fold": fold.index, "seed": seed,
+                              "train_sharpe": train_sharpe,
+                              "val_sharpe": val_sharpe,
+                              "val_return_pct": val_return, **m})
                 seed_models.append(model)
                 logger.info("  fold %d seed %d -> %+.2f%%", fold.index, seed, m["return_pct"])
 

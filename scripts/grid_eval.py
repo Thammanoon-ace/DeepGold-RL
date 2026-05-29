@@ -65,6 +65,10 @@ def main() -> None:
     p.add_argument("--ter-gate-threshold", type=float, default=None,
                    help="Eval-time TER threshold; override new entries with HOLD "
                         "when TER < threshold. 0.0 = disabled.")
+    p.add_argument("--val-frac", type=float, default=0.0,
+                   help="Fraction of each fold's training data held out as a "
+                        "validation slice. Used for non-leaking top-k seed "
+                        "ranking. 0.0 = disabled. Typical: 0.2.")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -95,6 +99,7 @@ def main() -> None:
         timesteps_per_fold=args.timesteps, num_envs=args.num_envs,
         evaluate_ensemble=not args.no_ensemble, resample_to=args.timeframe,
         run_tag=args.tag, engine=args.engine, gpu_n_steps=args.n_steps,
+        val_frac=args.val_frac,
     )
     result = evaluator.run(csv_path=args.data)
 

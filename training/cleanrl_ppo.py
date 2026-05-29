@@ -299,4 +299,21 @@ def train_cleanrl_ppo(env, arch: str = "cnn", ppo: Optional[PPOConfig] = None,
             recent = np.mean(ep_returns[-50:])
             print(f"  update {update}/{updates} | ep_return(last50) {recent:+.2f}%")
 
+    # ---- Training-time Sharpe (for non-leaking top-k seed selection) ----- #
+    # Sharpe of the last 50 training-episode returns (in %). Stashed on the
+    # ActorCritic so the caller can surface it as a per-seed metric without
+    # changing the (ac, ep_returns) return signature. NaN-safe.
+    if len(ep_returns) >= 2:
+        recent = np.asarray(ep_returns[-50:], dtype=np.float64)
+        mu, sigma = float(recent.mean()), float(recent.std(ddof=0))
+        ac._train_sharpe = mu / sigma if sigma > 1e-9 else 0.0
+        ac._train_ep_return_mean = mu
+        ac._train_ep_return_std = sigma
+        ac._train_n_episodes = int(len(ep_returns))
+    else:
+        ac._train_sharpe = 0.0
+        ac._train_ep_return_mean = 0.0
+        ac._train_ep_return_std = 0.0
+        ac._train_n_episodes = int(len(ep_returns))
+
     return ac, ep_returns
