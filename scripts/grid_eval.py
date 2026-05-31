@@ -33,6 +33,9 @@ def main() -> None:
     p.add_argument("--data", default=None)
     p.add_argument("--policy-arch", default=None, choices=["mlp", "lstm", "transformer", "cnn", "cnn_lstm"])
     p.add_argument("--seeds", type=int, default=5, help="Number of training seeds.")
+    p.add_argument("--seeds-start", type=int, default=0,
+                   help="First seed value (default 0). Use 32 to run a sanity "
+                        "rerun on seeds 32..32+N-1 instead of the standard 0..N-1.")
     p.add_argument("--folds", type=int, default=5)
     p.add_argument("--timesteps", type=int, default=50_000, help="PPO steps per (seed,fold) cell.")
     p.add_argument("--num-envs", type=int, default=32, help="Vectorized training lanes.")
@@ -69,6 +72,14 @@ def main() -> None:
                    help="Fraction of each fold's training data held out as a "
                         "validation slice. Used for non-leaking top-k seed "
                         "ranking. 0.0 = disabled. Typical: 0.2.")
+    p.add_argument("--lr-schedule", default=None, choices=["constant", "cosine"],
+                   help="LR schedule for gpu engine: constant or cosine.")
+    p.add_argument("--cosine-min-frac", type=float, default=None,
+                   help="Cosine LR minimum as fraction of initial LR (default 0.05).")
+    p.add_argument("--swa", action="store_true",
+                   help="Enable Stochastic Weight Averaging (V3.5 lever B).")
+    p.add_argument("--swa-start-frac", type=float, default=None,
+                   help="Fraction of training after which SWA starts (default 0.6).")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -91,11 +102,20 @@ def main() -> None:
         cfg.backtest.ter_gate_window = args.ter_gate_window
     if args.ter_gate_threshold is not None:
         cfg.backtest.ter_gate_threshold = args.ter_gate_threshold
+    if args.lr_schedule is not None:
+        cfg.training.lr_schedule = args.lr_schedule
+    if args.cosine_min_frac is not None:
+        cfg.training.cosine_min_frac = args.cosine_min_frac
+    if args.swa:
+        cfg.training.use_swa = True
+    if args.swa_start_frac is not None:
+        cfg.training.swa_start_frac = args.swa_start_frac
     cfg.paths.ensure()
 
     splitter = TimeSeriesSplitter(n_splits=args.folds, mode="expanding", gap=cfg.env.window_size)
     evaluator = GridEvaluator(
-        cfg, seeds=list(range(args.seeds)), splitter=splitter,
+        cfg, seeds=list(range(args.seeds_start, args.seeds_start + args.seeds)),
+        splitter=splitter,
         timesteps_per_fold=args.timesteps, num_envs=args.num_envs,
         evaluate_ensemble=not args.no_ensemble, resample_to=args.timeframe,
         run_tag=args.tag, engine=args.engine, gpu_n_steps=args.n_steps,

@@ -26,22 +26,61 @@ These are non-obvious, hard-won project facts. Treat as priors:
    reward = 46.6 percentage points. Any single-backtest claim is meaningless.
    Always report a distribution + bootstrap median CI + Robustness Score (see
    [validation/robustness.py](validation/robustness.py)).
-2. **No reliable edge has been found** on gold M5 with the configurations
-   tested. The buy-and-hold baseline (+27% over the test period) is unbeaten
-   on raw return or Sharpe by any single-seed config.
-3. **Only the reward *objective* (excess reward) has improved results.**
-   Per [docs/EXPERIMENT_SUMMARY.md §15](docs/EXPERIMENT_SUMMARY.md), the
-   excess-reward ensemble beat BH per-fold return 75% of folds and 100% with
-   a 3-seed ensemble. But its single-seed median CI still straddles 0 — the
-   big-seed verdict is the open question.
-4. **DSR reward was dropped** (2026-05-27): 12-cell grid, 0% beat BH,
+2. **Timeframe is the load-bearing variable, not architecture/features.**
+   Cross-timeframe sweep (32×4 grid, excess reward, [EXPERIMENT_SUMMARY.md
+   §15.8-§15.13](docs/EXPERIMENT_SUMMARY.md)) found the edge peaks at H4:
+   - M5: single CI [−3.7, +5.5] straddles 0 (no edge)
+   - H1: CI [+3.6, +10.3] excludes 0 but ensemble loses to BH
+   - **H4: CI [+3.2, +10.9] excludes 0, ensemble robustness +12.9, beats BH on 25% of folds**
+   - D1: CI [−9.0, −5.1] significantly negative — too coarse
+3. **H4 + Cosine LR + SWA has a positive expected per-cell return but
+   loses to buy-and-hold on every metric tracked** (four independent
+   32-seed runs × 4 folds = 512 cells; see [[risk-adjusted-also-lost]]):
+   - **Raw return:** agent median +12.07 % vs BH +25.95 % → **agent loses
+     by 13.9 pp**.
+   - **Sharpe:** agent median +0.500 vs BH +1.219 → **agent loses by 0.72**.
+   - **Max DD:** agent median 18.86 % vs BH 11.00 % → **agent is 7.9 pp
+     worse** (higher drawdown).
+   - **Single-cell CI excludes 0** ([+2.7, +6.6] across the four runs), so
+     the per-cell expected return IS positive — but BH's expected return is
+     larger and BH's risk is lower.
+   - **Where the agent beats BH:** only fold 0 (range / down market) on
+     Sharpe (78.9 % of cells). But BH itself has negative Sharpe (−0.51)
+     there; the agent is "less negative" (−0.18), not "positive edge."
+   - **Where the agent decisively loses:** fold 2 (strong trend) — **0 %**
+     of agent cells beat BH on Sharpe. Trend folds are exactly where retail
+     RL on raw OHLC consistently loses to passive holding (§15.6 "BH is not
+     beaten in a structural gold bull" prediction confirmed).
+   - **The earlier §15.18 / [[cosine-swa-unblock]] memo's "+30.4 % beats BH"
+     claim was a single-run upper-tail draw whose signal does not exist in
+     4-run aggregate.** It is fully retracted.
+4. **Only the reward *objective* (excess reward) improved results among
+   the reward levers.** §15.4: excess-reward ensemble beat BH per-fold return
+   in 75 % of folds; the H4+cosine+SWA stack lifted that to 100 %.
+5. **DSR reward was dropped** (2026-05-27): 12-cell grid, 0% beat BH,
    robustness −93.7, ensemble even worse. Do not revisit.
-5. **Every complexity lever tested has failed:** hybrid CNN-LSTM, transformer,
-   volatility-targeted sizing, regime features as observations, deeper nets.
-   They overfit the low-SNR data and the held-out distribution looks worse,
-   not better. See [docs/V3_5_VARIANCE_REDUCTION.md](docs/V3_5_VARIANCE_REDUCTION.md).
-6. **Walk-forward + per-fold normalizer is mandatory** to avoid leakage. The
+6. **Every observation / architecture complexity lever has failed:** hybrid
+   CNN-LSTM, transformer, volatility-targeted sizing, regime features as
+   observations, deeper nets. They overfit the low-SNR data and the held-out
+   distribution looks worse, not better. See
+   [docs/V3_5_VARIANCE_REDUCTION.md](docs/V3_5_VARIANCE_REDUCTION.md).
+7. **Optimization complexity DID help** (the §15.17/§15.18 finding that
+   reverses item 6 for *optimization* levers): cosine LR schedule (+5 pp on
+   ensemble mean vs constant LR) and SWA on top (another +7 pp, plus the
+   risk-adjusted gains in item 3). Train the cosine + SWA stack by default for
+   any H4 experiment.
+8. **Every entry-gate / seed-selection lever has failed:** ATR-based regime
+   gate (§15.11), TER-based regime gate (§15.12), train-Sharpe top-k ranker
+   (§15.15), held-out validation top-k ranker (§15.16). Each either degrades
+   the ensemble or sacrifices too much training data. The unfiltered policy +
+   32-seed ensemble averaging remains the best aggregator.
+9. **Walk-forward + per-fold normalizer is mandatory** to avoid leakage. The
    normalizer must be fit on train-only per fold ([validation/grid.py](validation/grid.py)).
+10. **Speed ≠ alpha** but **timeframe = alpha**. Tier 1.2/2.1/2.4/CPU-audit
+    proved no infra lever exceeds 1.07× on this codebase (Python/launch
+    overhead dominates, not GPU). One timeframe change (M5 → H4) and one
+    optimization-schedule change (constant → cosine+SWA) moved the ensemble
+    mean from +1.5 % to +26 %. Spend session time on science, not infra.
 
 ---
 
@@ -113,6 +152,17 @@ python scripts/grid_eval.py --engine gpu --policy-arch cnn --reward-mode excess 
   --seeds 16 --folds 5 --timesteps 1310720 --num-envs 1024 --n-steps 128 \
   --tag excess_bigseed_gpu
 
+# THE CURRENT BEST CONFIG — H4 + cosine LR + SWA (§15.18):
+python scripts/grid_eval.py --engine gpu --policy-arch cnn --reward-mode excess \
+  --seeds 32 --folds 5 --timesteps 1310720 --num-envs 2048 --n-steps 128 \
+  --timeframe H4 --lr-schedule cosine --swa --tag excess_bigseed_32_h4_cosine_swa
+
+# Sanity rerun with a different seed batch (use --seeds-start to shift the range)
+python scripts/grid_eval.py ... --seeds 32 --seeds-start 32 --tag <name>_s32
+
+# V4 readiness smoke (train + save + load + backtest round trip)
+python scripts/v4_smoke.py
+
 # Compare grids
 python scripts/compare_grids.py --grids m5 excess dsr
 
@@ -142,16 +192,72 @@ python scripts/_test_vec_equiv.py
 
 ---
 
-## Open questions (current, as of 2026-05-28)
+## Open questions (current, as of 2026-05-30)
 
-1. **Does excess reward beat buy-hold with statistical significance** at large
-   seed count (16–32 seeds × 5 folds)? — Big-seed grid in progress; the
-   prior 3-seed CI was `[−14.5, +58.0]` (straddles 0).
-2. **Will the GPU engine's 16-member ensemble recover** what the 3-member
-   ensemble lacked? Or is GPU-policy diversity an inherent ensemble-killer?
-3. **Does the framework generalize** to other instruments (EURUSD, BTC,
-   indices) or is the negative result gold-M5-specific?
+The original Q1/Q2/Q3 from 2026-05-28 have been **answered**:
 
-If those answers all come back negative on a definitive run, the honest
-project verdict is: *RL on retail-data + retail-compute is not a practical
-trading edge — the science is the negative result*.
+- ~~Q1 Does excess reward beat BH at 32×4 seeds on M5?~~ — **No.** §15.8: CI
+  [−3.7, +5.5] straddles 0.
+- ~~Q2 Will the 32-member ensemble recover what 3-member lacked?~~ — **No on
+  M5** (ensemble +1.5 % vs BH +27 %). **Yes on H4 + cosine + SWA** (§15.18:
+  100 % profitable folds, robustness +27.9).
+- ~~Q3 Does the framework generalize off gold?~~ — **Still untested.**
+  Multi-instrument H4 (EURUSD/BTC/SPX) is now the cleanest open question.
+
+**New open questions (2026-05-30):**
+
+1. **Is the +30 % ensemble mean from the first H4+cosine+SWA run reproducible
+   at a larger run-count?** Two runs gave +30.4 % and +21.5 % (avg +26 % =
+   tied with BH on raw return). 4-6 more independent reruns (seeds 64-95,
+   96-127, …) would put a CI on the cross-run ensemble mean. The risk-
+   adjusted metrics (Sharpe, DD, Robustness, 100% folds) are already stable
+   across both runs.
+2. **Does the H4 + cosine + SWA edge generalize off gold?** Multi-instrument
+   H4 (EURUSD H4, BTC H4, SPX H4). If yes → cross-asset retail-RL edge. If no
+   → H4 sweet spot is gold-2025-specific. This is the single highest-value
+   experiment in the queue.
+3. **Live broker validation.** The §15.18 ensemble works on paper backtests.
+   Real frictions (live spread, swap, slippage) eat some of the edge. A
+   2-week demo-account paper-trading run with the saved cosine+SWA
+   ensemble would calibrate the paper-to-live decay.
+
+**Current honest project verdict (2026-05-31, after 4-run + cross-cell
+risk-adjusted replication, supersedes all prior framings):**
+
+*RL on retail-data + retail-compute on gold has no edge over buy-and-hold:*
+- **Raw return: BH wins by 13.9 pp** (BH +25.95 % vs agent +12.07 %).
+- **Sharpe: BH wins by 0.72** (BH +1.22 vs agent +0.50).
+- **Max DD: BH wins by 7.9 pp** (BH 11.00 % vs agent 18.86 %).
+
+The H4 + cosine + SWA stack DOES produce a measurable positive expected
+per-cell return (single-cell CI [+2.7, +6.6] excludes 0 across all four
+independent 32-seed runs). But that expected return is smaller and riskier
+than passive holding's. **The framework rigorously confirms the original
+CLAUDE.md "negative result" prediction from May 28: no tradeable retail-RL
+edge exists on this data and configuration space.**
+
+The session's intermediate claims — §15.10 "first +12.9 Robustness," §15.17
+"cosine is the first non-failed lever," §15.18 "+30.4 % beats BH by 4.5 pp"
+— were all overturned by replication and cross-cell risk-adjusted analysis.
+The signal that survives replication is small ("positive expected return per
+cell"), reliable (CI excludes 0 in 4/4 runs, 100 % profitable folds in 3/4
+runs), and **insufficient** for any "beats BH" claim on any metric.
+
+The framework's scientific contribution is:
+1. **Timeframe choice IS the load-bearing variable** for retail-RL on gold
+   (M5 has no edge; H4 is the sweet spot; D1 is significantly negative).
+2. **Optimization-schedule complexity (cosine + SWA) helps relative to the
+   failing baseline** but does not flip the BH comparison.
+3. **Single-run "beats BH" claims are unreliable**; multi-run replication +
+   cross-cell distribution analysis is mandatory.
+4. **The honest output of this project is a rigorous negative result** —
+   not a profitable bot. This is one of the pre-registered acceptable
+   outcomes per CLAUDE.md's original framing.
+
+The project is now in a "rigorous negative result wrap-up" state. The
+remaining productive work is:
+- Document the negative result formally (it's well-supported and worth
+  archiving).
+- Multi-instrument H4 (EURUSD / BTC / SPX) would only confirm or marginally
+  qualify the gold-specific finding; it's optional, not load-bearing.
+- Going live is **not** justified by any metric the project tracks.

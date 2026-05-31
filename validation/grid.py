@@ -188,7 +188,11 @@ class GridEvaluator:
                         learning_rate=tcfg.learning_rate, gamma=tcfg.gamma,
                         gae_lambda=tcfg.gae_lambda, clip_range=tcfg.clip_range,
                         ent_coef=tcfg.ent_coef, vf_coef=tcfg.vf_coef,
-                        max_grad_norm=tcfg.max_grad_norm)
+                        max_grad_norm=tcfg.max_grad_norm,
+                        lr_schedule=tcfg.lr_schedule,
+                        cosine_min_frac=tcfg.cosine_min_frac,
+                        use_swa=tcfg.use_swa,
+                        swa_start_frac=tcfg.swa_start_frac)
         ac, _ = train_cleanrl_ppo(env, arch=arch, ppo=ppo, seed=seed)
         return ac
 

@@ -940,3 +940,230 @@ best operational result. The top-k lever is closed.
 Artifacts: `logs/grid/excess_bigseed_32_h4_val20/{summary.json, cells.csv,
 ensemble_cells.csv}`. cells.csv includes `train_sharpe`, `val_sharpe`,
 `val_return_pct`.
+
+### 15.17 H4 + Cosine LR — first lever to improve every aggregate metric (2026-05-30)
+Variance-reduction lever A from the ROADMAP V3.5 backlog: anneal the PPO
+optimizer LR from `learning_rate` (3e-4) down to `learning_rate * cosine_min_frac`
+(0.05 → 1.5e-5) over the full training run, instead of constant LR. Implementation:
+`PPOConfig.lr_schedule="cosine"` + `cosine_min_frac` in
+[training/cleanrl_ppo.py](../training/cleanrl_ppo.py), wired through
+`TrainingConfig` and `--lr-schedule cosine` CLI in
+[scripts/grid_eval.py](../scripts/grid_eval.py). Tag:
+`excess_bigseed_32_h4_cosine`, ~59 min wall-clock.
+
+| | Baseline (§15.10) | **+ Cosine LR** | Δ |
+|---|---|---|---|
+| single CI 95% | [+3.2, +10.9] | **[+6.7, +13.6]** | **shift up +3.5 pp** |
+| single median | +5.87 % | +8.82 % | +3 pp |
+| single mean | +11.25 % | **+17.01 %** | +5.8 pp |
+| single std | 28.07 | 35.89 | **+7.8** ❌ (variance increased) |
+| single beats BH | 23 % | 26 % | +3 pp |
+| ensemble median | +16.66 % | +16.09 % | ≈ |
+| **ensemble mean** | +18.10 % | **+23.08 %** | **+5 pp** |
+| ensemble std | 15.59 | 21.29 | +5.7 (worse) |
+| **ensemble worst fold** | −2.17 % | **+3.26 %** | first ALL-POSITIVE ensemble |
+| **ensemble best fold** | +41.26 % | **+56.88 %** | +15.6 pp |
+| ensemble beats BH | 25 % | 25 % | tied |
+| **ensemble robustness** | +12.89 | **+14.78** | +1.9 |
+
+**Per-fold ensemble:**
+
+| fold | regime | baseline | + cosine | Δ |
+|---|---|---|---|---|
+| 0 | range | −2.2 % | +3.3 % | +5.5 |
+| 1 | mild trend | +13.4 % | +6.6 % | **−6.8** |
+| 2 | trend | +19.9 % | +25.6 % | +5.7 |
+| 3 | strong trend | +41.3 % | **+56.9 %** | +15.6 |
+
+**The lever does *not* reduce variance — it amplifies the mean.** Single std went 28 → 36 and ensemble std went 15.6 → 21.3, both worse. But the CI bottom shifted from +3.2 to +6.7 because the mean shifted up further than the std widened. Robustness Score is up despite the variance increase because the distribution is centered higher. The label "variance reduction" is misleading for cosine LR in this codebase — call it a *mean amplifier*.
+
+**This is the closest the project has come to V4 unblock so far:**
+- Ensemble mean +23.1 % vs BH +25.9 % — gap closed to 2.9 pp (was 8 pp on baseline)
+- **First time every ensemble fold is profitable** (100 % positive folds)
+- Single CI is the project's highest lower bound: +6.7 % per cell with 95 % confidence
+- Record single-seed cell: fold 3 seed 26 = **+280.23 %**
+
+**Why it likely works (hypothesis):** at constant LR=3e-4, the policy keeps making fixed-size moves through training. Late in training, those moves bounce around the optimum without settling. Cosine reduces step size to ~1.5e-5 by the end, letting the policy converge into the basin it found. The basins are deeper / more profitable on average, especially on the strong-trend fold (+15.6 pp on fold 3 alone). Fold 1 (mild trend) is the only fold that regresses — possibly the cosine schedule overshoots into a local optimum the constant-LR policy didn't commit to.
+
+**Status of §15.10 conclusion: superseded for H4.** The new best operational result is `excess_bigseed_32_h4_cosine`:
+- Ensemble robustness +14.78 (vs §15.10's +12.89)
+- 100 % profitable ensemble folds (vs §15.10's 75 %)
+- Single CI [+6.7, +13.6] (vs §15.10's [+3.2, +10.9])
+
+**Next variance-reduction lever to try (from ROADMAP V3.5):** SWA (Stochastic
+Weight Averaging) — average the policy weights from the last K training
+checkpoints. Cosine LR + SWA is the textbook combination: cosine drops LR so
+the policy settles, SWA averages the settled trajectory. Could close the
+remaining 2.9 pp gap to BH and produce the project's first cleanly tradeable
+ensemble result.
+
+Artifacts: `logs/grid/excess_bigseed_32_h4_cosine/{summary.json, cells.csv, ensemble_cells.csv}`.
+
+### 15.18 H4 + Cosine LR + SWA — V4 unblock candidate (2026-05-30)
+Combining §15.17's cosine LR schedule with Stochastic Weight Averaging (SWA):
+average the policy weights from each inner PPO epoch starting at
+`swa_start_frac` = 0.6 of training. Implementation:
+`PPOConfig.use_swa=True` + `--swa` CLI flag in
+[scripts/grid_eval.py](../scripts/grid_eval.py). The averaged weights replace
+the last-checkpoint weights at the end of training, so the deployed policy is
+the SWA model. Tag: `excess_bigseed_32_h4_cosine_swa`, ~62 min.
+
+| | Baseline (§15.10) | Cosine (§15.17) | **Cosine + SWA** |
+|---|---|---|---|
+| single CI 95% | [+3.2, +10.9] | [+6.7, +13.6] | **[+6.6, +13.6]** |
+| single median | +5.87 % | +8.82 % | **+10.70 %** |
+| single mean | +11.25 % | +17.01 % | +15.37 % |
+| **single std** | 28.07 | 35.89 (worse) | **28.17** (SWA fixed cosine's std hit) |
+| **ensemble median** | +16.66 % | +16.09 % | **+29.08 %** |
+| **ensemble mean** | +18.10 % | +23.08 % | **+30.43 %** ← beats BH (+25.94 %) by 4.5 pp |
+| ensemble std | 15.59 | 21.29 | **17.91** |
+| ensemble worst fold | −2.17 % | +3.26 % | **+8.84 %** |
+| ensemble best fold | +41.26 % | +56.88 % | +54.73 % |
+| **ensemble beats BH** | 25 % | 25 % | **50 %** ← first time >25 % |
+| **ensemble robustness** | +12.89 | +14.78 | **+27.91** ← 2× project's prior best |
+
+**Per-fold ensemble (with Sharpe and Max DD):**
+
+| fold | regime | baseline | cosine | **cosine+SWA** | Sharpe | Max DD |
+|---|---|---|---|---|---|---|
+| 0 | range | −2.2 % | +3.3 % | **+8.8 %** | 0.42 | 15.6 % |
+| 1 | mild trend | +13.4 % | +6.6 % | **+39.7 %** | **1.37** | 17.9 % |
+| 2 | trend | +19.9 % | +25.6 % | +18.5 % | 0.75 | 13.9 % |
+| **3** | **strong trend** | +41.3 % | +56.9 % | +54.7 % | **1.95** | **9.3 %** |
+
+**This is the project's first V4-unblock candidate.**
+1. **Ensemble mean +30.4 % > BH +25.9 %** by 4.5 pp — first time any
+   operational (no leakage, no cherry-picking) config beats buy-and-hold on
+   raw return.
+2. **Beats BH on 50 % of folds** at the ensemble level — first time the
+   project clears the 25 % ceiling that every prior lever stalled at.
+3. **Robustness +27.9** — more than 2× the previous record (+12.9). The
+   distribution is centered higher AND tighter than any prior run.
+4. **Sharpe 1.37 and 1.95** on the two trend folds (mild + strong) —
+   competitive with BH's typical Sharpe (~1.3-1.5) and *better* risk-adjusted
+   on fold 3.
+5. **Max DD reduced significantly** (fold 3: 28 % → 9.3 %). The SWA-averaged
+   policy rides the trend with much less reversal exposure.
+6. **SWA fixes cosine's variance increase**: std went 35.9 → 28.2, back to
+   baseline level. The mean amplification from cosine is preserved; the
+   variance increase is undone. Textbook SWA effect.
+
+**Why the combo works (hypothesis):**
+- Without cosine, the constant LR keeps the policy bouncing around the
+  optimum. SWA averaging that trajectory yields ≈ the same trajectory.
+- With cosine, late-training LR is small. Each inner-epoch update moves the
+  policy in a tiny step around the basin. SWA averages those steps and finds
+  the **centroid of the basin** — a better generalizing policy than any
+  single endpoint snapshot.
+- The combination is what the original SWA papers describe; it's the canonical
+  setup.
+
+**Status of the §15.6 / §15.10 conclusions: superseded for H4.** The H4 +
+cosine + SWA configuration has a robust edge on raw return, Sharpe, and
+drawdown vs buy-and-hold. The §15.6 "no robust RL edge beyond buy-and-hold"
+conclusion was correct for the constant-LR baseline + every gate / ranker we
+tried; it does NOT survive cosine + SWA.
+
+**Next steps in priority order:**
+1. **Sanity rerun** with a different seed sequence (e.g. seeds 32-63) to
+   confirm the +30 % isn't a lucky CUDA non-determinism draw. ~60 min.
+2. **Multi-instrument H4** with cosine+SWA — does the edge generalize off
+   gold? EURUSD H4, BTC H4, SPX H4.
+3. **V4 work**: live-trading pipeline (LiveTrader + MT5 bridge) is the next
+   bottleneck. Demo-account smoke test before any live deployment.
+4. **Variance reduction lever C** (target_kl tuning) — risky given prior
+   failure, low priority now that cosine+SWA already crossed the V4 threshold.
+
+Artifacts: `logs/grid/excess_bigseed_32_h4_cosine_swa/{summary.json, cells.csv, ensemble_cells.csv}`.
+
+### 15.19 Four-run reproducibility check (2026-05-31)
+The §15.18 single-run "+30.4 % ensemble mean beats BH by 4.5 pp" claim was
+sanity-checked with three additional independent 32-seed runs (seeds 32-63,
+64-95, 96-127) using identical config. The result substantially weakens
+§15.18's headline.
+
+**Per-run results:**
+
+| seeds | tag | ensemble mean | robustness | %pos folds | beats BH | single CI |
+|---|---|---|---|---|---|---|
+| 0-31 | `..._cosine_swa` | **+30.43 %** | **+27.91** | 100 % | 50 % | [+6.6, +13.6] |
+| 32-63 | `..._cosine_swa_s32` | +21.51 % | +26.70 | 100 % | 25 % | [+3.7, +14.3] |
+| 64-95 | `..._cosine_swa_s64` | +14.45 % | **−3.89** ❌ | 75 % | 25 % | [+2.7, +15.1] |
+| 96-127 | `..._cosine_swa_s96` | +19.59 % | +17.04 | 100 % | 25 % | [+4.5, +15.5] |
+
+**Cross-run statistics (n=4):**
+
+| | mean ± std | range |
+|---|---|---|
+| Ensemble mean | **+21.50 ± 6.66 %** | [+14.5, +30.4] |
+| Robustness | **+16.94 ± 14.71** | [−3.9, +27.9] |
+| BH | +25.94 % | — |
+| **Δ (agent − BH)** | **−4.45 pp** | **agent loses to BH on average** |
+
+**The §15.18 headline is partially retracted:**
+
+| §15.18 claim | Four-run reality |
+|---|---|
+| "Ensemble mean +30.4 % beats BH +25.9 % by 4.5 pp" | **Average ensemble +21.5 % loses to BH by 4.5 pp** |
+| "Robustness +27.9, 2× the constant-LR baseline" | Avg +16.9, but range includes **−3.9** |
+| "Beats BH 50 % folds, first time > 25 %" | One run hit 50 %; others 25 %. Average ~31 %. |
+
+**What stays robust across all four runs:**
+- **Single-cell CI excludes 0 in every run** (lowest bound +2.7 %, highest
+  +6.6 %). The per-cell positive-expected-return result IS reproducible.
+- **3 of 4 runs hit 100 % profitable ensemble folds**; the worst run still
+  hit 75 %. Win-rate stability holds.
+- **Single-cell metrics are tighter than ensemble metrics:** single-cell
+  median is +8 to +11 % across all four runs (std on the median estimator
+  about ±1.5 pp), much steadier than the ensemble mean.
+
+**What does NOT stay robust:**
+- Raw ensemble mean swings ±7 pp run-to-run.
+- Robustness Score has a ~50 % chance of being in the +17 to +28 range and
+  ~25 % chance of being negative. One number from one run is not the truth.
+- "Beats BH at the fold level" is mostly 25 % (one fold of four trending).
+
+**Why this matters for prior session memos:**
+- [[cosine-swa-unblock]] memo's "+30 % beats BH" framing was based on the
+  lucky upper-tail draw of seeds 0-31. The four-run average is closer to
+  "ties or trails BH on raw return."
+- [[sanity-rerun-verdict]] memo (after just two runs) called this "borderline
+  V4 unblock." Two more runs confirm: it's not unblock, it's
+  "positive-expected-per-cell with raw-return parity to BH."
+
+**Updated project verdict for downstream code / docs / CLAUDE.md:**
+- Per-cell expected return: **positive, reproducible**.
+- Raw ensemble return: **ties or trails BH** on average.
+- Risk-adjusted (Sharpe / DD) vs BH: **not yet quantified across runs** —
+  per-fold Sharpe is positive in the per-run reports but a cross-run Sharpe
+  distribution has not been computed. This is the next thing to compute
+  before any "tradeable" framing.
+- Win rate at the fold level: **stable** (typically 100 %, worst case 75 %).
+
+**Operational implications:**
+- The §15.18-recommended config (cosine + SWA) is still the **best** known
+  config; it just doesn't justify the headline "beats BH" claim by itself.
+- Going live with the single-seed `scripts/v4_smoke.py` model is **not**
+  justified by raw-return metrics. An ensemble of 32 saved models would be
+  needed to match grid-eval, and even then the cross-run distribution does
+  not reliably exceed BH on raw return.
+
+**Next steps (priorities reset by this finding):**
+1. **Compute cross-run Sharpe and max-DD distributions** from `cells.csv` of
+   the four runs. If risk-adjusted metrics consistently beat BH across all
+   four × 128 = 512 cells, the "risk-adjusted edge" framing is rescuable;
+   if not, the project is closer to the original CLAUDE.md negative-result
+   wrap-up than to the §15.18 V4-unblock framing.
+2. **More replication.** 4 runs at std 6.7 pp gives a CI on the population
+   mean of about ±5 pp. Eight or sixteen runs would tighten that. Cheap
+   (~60 min each) and decisive.
+3. **Multi-instrument H4** remains the best remaining science question and
+   is now even more important: it would test whether "positive expected
+   per-cell return + raw-return parity with BH" is a gold-specific finding
+   or a framework-wide finding.
+
+Artifacts:
+- `logs/grid/excess_bigseed_32_h4_cosine_swa/{...}` (seeds 0-31)
+- `logs/grid/excess_bigseed_32_h4_cosine_swa_s32/{...}` (seeds 32-63)
+- `logs/grid/excess_bigseed_32_h4_cosine_swa_s64/{...}` (seeds 64-95)
+- `logs/grid/excess_bigseed_32_h4_cosine_swa_s96/{...}` (seeds 96-127)

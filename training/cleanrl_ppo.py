@@ -183,6 +183,19 @@ class PPOConfig:
                                         # in 'reduce-overhead' mode (CUDA graphs).
                                         # Off by default until the bench confirms a
                                         # net speedup on this codebase.
+    # ---- V3.5 variance-reduction (2026-05-30) -------------------------- #
+    # LR schedule: "constant" (default, backward-compatible) or "cosine"
+    # (cosine annealing from learning_rate down to learning_rate * cosine_min_frac
+    # over `total_timesteps`). Cosine schedules empirically tighten OOS
+    # variance on PPO by letting the policy converge before stopping.
+    lr_schedule: str = "constant"
+    cosine_min_frac: float = 0.05
+    # SWA (Stochastic Weight Averaging): average the policy weights from each
+    # inner PPO epoch starting at `swa_start_frac` of training. Pairs naturally
+    # with cosine LR — cosine drops LR so the policy settles, SWA averages the
+    # settled trajectory. Off by default; backward-compatible.
+    use_swa: bool = False
+    swa_start_frac: float = 0.6
 
 
 class _RewardNormalizer:
@@ -224,6 +237,18 @@ def train_cleanrl_ppo(env, arch: str = "cnn", ppo: Optional[PPOConfig] = None,
         ac = torch.compile(ac, mode="reduce-overhead")
     opt = torch.optim.Adam(ac.parameters(), lr=ppo.learning_rate, eps=1e-5)
 
+    # LR schedule: per-update cosine annealing (Variance reduction A).
+    if ppo.lr_schedule == "cosine":
+        lr_min = ppo.learning_rate * float(ppo.cosine_min_frac)
+        def _lr_for_update(u: int, total: int) -> float:
+            # cosine from lr -> lr_min over `total` updates, inclusive
+            from math import cos, pi
+            t = u / max(total - 1, 1)
+            return lr_min + 0.5 * (ppo.learning_rate - lr_min) * (1.0 + cos(pi * t))
+    else:
+        def _lr_for_update(u: int, total: int) -> float:
+            return ppo.learning_rate
+
     N, T = env.num_envs, ppo.n_steps
     obs = torch.zeros((T, N, env.obs_dim), device=dev)
     actions = torch.zeros((T, N), dtype=torch.long, device=dev)
@@ -241,7 +266,17 @@ def train_cleanrl_ppo(env, arch: str = "cnn", ppo: Optional[PPOConfig] = None,
     ep_returns: List[float] = []
     rnorm = _RewardNormalizer(N, ppo.gamma, dev, env.dtype) if ppo.normalize_reward else None
 
+    # SWA state: running average of state_dict tensors, sampled per inner epoch
+    # once we cross swa_start_frac. None until first sample is taken.
+    swa_state = None
+    n_swa = 0
+    swa_start_update = max(int(updates * ppo.swa_start_frac), 0) if ppo.use_swa else updates + 1
+
     for update in range(updates):
+        # Apply scheduled LR for this update.
+        cur_lr = _lr_for_update(update, updates)
+        for pg in opt.param_groups:
+            pg["lr"] = cur_lr
         for t in range(T):
             obs[t], dones[t] = next_obs, next_done
             with torch.no_grad():
@@ -293,11 +328,33 @@ def train_cleanrl_ppo(env, arch: str = "cnn", ppo: Optional[PPOConfig] = None,
                     with torch.no_grad():
                         if ((b_lp[mb] - newlp).mean().abs()) > ppo.target_kl:
                             stop = True; break
+            # SWA: at the end of each inner epoch, if we're past swa_start,
+            # incorporate the current weights into the running average.
+            if ppo.use_swa and update >= swa_start_update:
+                with torch.no_grad():
+                    if swa_state is None:
+                        swa_state = {k: v.detach().clone() for k, v in ac.state_dict().items()}
+                        n_swa = 1
+                    else:
+                        n_swa += 1
+                        w = 1.0 / n_swa
+                        cur = ac.state_dict()
+                        for k, v in swa_state.items():
+                            v.mul_(1.0 - w).add_(cur[k].detach(), alpha=w)
             if stop:
                 break
         if log_every and update % log_every == 0 and ep_returns:
             recent = np.mean(ep_returns[-50:])
             print(f"  update {update}/{updates} | ep_return(last50) {recent:+.2f}%")
+
+    # ---- SWA: load averaged weights into ac, replacing the last-checkpoint
+    # weights as the deployable policy. ------------------------------------- #
+    if ppo.use_swa and swa_state is not None:
+        with torch.no_grad():
+            ac.load_state_dict(swa_state)
+        ac._swa_n_samples = int(n_swa)
+    else:
+        ac._swa_n_samples = 0
 
     # ---- Training-time Sharpe (for non-leaking top-k seed selection) ----- #
     # Sharpe of the last 50 training-episode returns (in %). Stashed on the

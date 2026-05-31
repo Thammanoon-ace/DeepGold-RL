@@ -229,6 +229,18 @@ class TrainingConfig:
     max_grad_norm: float = 0.5
     net_arch: List[int] = field(default_factory=lambda: [128, 128])
 
+    # ---- V3.5 variance-reduction levers (gpu engine only, 2026-05-30) ---- #
+    # LR schedule: "constant" (default, backward-compatible) or "cosine".
+    # Cosine anneals from learning_rate down to learning_rate * cosine_min_frac
+    # over the full training run. Reduces OOS variance on PPO when convergence
+    # is the bottleneck rather than exploration.
+    lr_schedule: str = "constant"
+    cosine_min_frac: float = 0.05
+    # SWA: average policy weights from each inner PPO epoch once we cross
+    # swa_start_frac of training. Pairs naturally with cosine LR.
+    use_swa: bool = False
+    swa_start_frac: float = 0.6
+
     # ---- Deep sequence architecture (V3 / Phase 4) --------------------- #
     # policy_arch: 'mlp' (default) | 'lstm' | 'transformer' | 'cnn'.
     # Non-MLP archs use a custom feature extractor (see policies/) that treats

@@ -4,6 +4,16 @@ A modular, production-style research framework for training a **PPO** agent to
 trade spot gold (XAUUSD), evaluating it **out-of-sample on 2025 data**, and
 (optionally) bridging to **MetaTrader 5** for live execution.
 
+> **Final result (2026-05-31): negative.** Across 4 independent 32-seed walk-
+> forward runs of the best configuration we found (H4 + cosine LR + SWA), the
+> agent loses to passive buy-and-hold on every metric — return (−13.9 pp),
+> Sharpe (−0.72), and max drawdown (+7.9 pp worse). See
+> [`docs/NEGATIVE_RESULT.md`](docs/NEGATIVE_RESULT.md) for the canonical
+> writeup of methodology, findings, and what survives / does not survive
+> multi-run replication. The framework itself (multi-seed walk-forward grid +
+> distributional analysis + bootstrap median CI) is reusable; the trading
+> result is not.
+
 > **Philosophy.** This is a research framework, *not* a profit guarantee. The
 > environment models realistic frictions (spread, slippage, commission,
 > leverage/margin), the reward is shaped to resist reward hacking, the

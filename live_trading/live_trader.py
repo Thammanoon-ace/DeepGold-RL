@@ -16,18 +16,21 @@ and independent risk guards cap position count and size (requirement #13).
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
+import torch
 from stable_baselines3 import PPO
 
 from config.config import Config
 from env.gold_trading_env import ACTION_BUY, ACTION_CLOSE, ACTION_NAMES, ACTION_SELL
 from live_trading.mt5_bridge import MT5Bridge
+from training.cleanrl_ppo import ActorCritic
 from utils.feature_engineering import FeatureEngineer
 from utils.normalization import FeatureNormalizer
 
@@ -50,25 +53,64 @@ class LiveTrader:
         self.model_name = model_name or config.training.model_name
         self.bridge = MT5Bridge(config.live)
         self.engineer = FeatureEngineer(config.features)
-        self.model: Optional[PPO] = None
+        self.model: Optional[Any] = None  # PPO | ActorCritic — both expose predict()
         self.normalizer: Optional[FeatureNormalizer] = None
+        self.meta: Optional[dict] = None  # populated when loading a `.pt` (CleanRL)
 
     # ------------------------------------------------------------------ #
     # Setup
     # ------------------------------------------------------------------ #
     def load_artifacts(self) -> None:
-        """Load the trained model and the training-time feature normalizer."""
+        """Load the trained model and the training-time feature normalizer.
+
+        Detects the model format by extension:
+
+        * ``<name>.zip`` — Stable-Baselines3 PPO (the original path).
+        * ``<name>.pt`` — GPU CleanRL ``ActorCritic`` checkpoint produced by
+          :mod:`training.cleanrl_ppo` (the H4 + cosine + SWA stack). Requires a
+          sibling ``<name>_meta.json`` that records ``obs_dim``, ``window``,
+          ``n_features`` and ``arch`` so we can reconstruct the network before
+          loading the ``state_dict``. ``ActorCritic.predict(obs, deterministic=
+          True)`` is signature-compatible with SB3 PPO, so the rest of the live
+          loop is unchanged.
+
+        ``.pt`` takes precedence when both files exist.
+        """
         models = self.config.paths.models
-        model_path = models / f"{self.model_name}.zip"
+        pt_path = models / f"{self.model_name}.pt"
+        zip_path = models / f"{self.model_name}.zip"
         norm_path = models / f"{self.model_name}_normalizer.joblib"
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model not found: {model_path}")
         if not norm_path.exists():
             raise FileNotFoundError(f"Normalizer not found: {norm_path}")
 
-        self.model = PPO.load(model_path, device="auto")
-        self.normalizer = FeatureNormalizer.load(norm_path)
-        logger.info("Loaded live artefacts for '%s'.", self.model_name)
+        if pt_path.exists():
+            # CleanRL ActorCritic (H4 + cosine + SWA stack; see scripts/v4_smoke.py).
+            meta_path = models / f"{self.model_name}_meta.json"
+            if not meta_path.exists():
+                raise FileNotFoundError(
+                    f"Found {pt_path.name} but no sibling {meta_path.name}; "
+                    "rerun scripts/v4_smoke.py or equivalent to regenerate metadata.")
+            self.meta = json.loads(meta_path.read_text())
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            ckpt = torch.load(pt_path, map_location=device, weights_only=False)
+            ac = ActorCritic(ckpt["obs_dim"], ckpt["window"], ckpt["n_features"],
+                             arch=ckpt.get("arch", "cnn")).to(device)
+            ac.load_state_dict(ckpt["state_dict"])
+            ac.eval()
+            self.model = ac
+            self.normalizer = FeatureNormalizer.load(norm_path)
+            logger.info("Loaded CleanRL ActorCritic ('%s.pt') with %d params.",
+                        self.model_name,
+                        sum(p.numel() for p in ac.parameters()))
+        elif zip_path.exists():
+            # Legacy Stable-Baselines3 PPO path.
+            self.model = PPO.load(zip_path, device="auto")
+            self.normalizer = FeatureNormalizer.load(norm_path)
+            logger.info("Loaded SB3 PPO ('%s.zip').", self.model_name)
+        else:
+            raise FileNotFoundError(
+                f"No model found for '{self.model_name}': tried "
+                f"{pt_path.name} and {zip_path.name} under {models}/.")
 
     def connect(self, **credentials) -> bool:
         """Connect to the MT5 terminal (see :meth:`MT5Bridge.connect`)."""
