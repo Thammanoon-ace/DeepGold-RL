@@ -81,11 +81,11 @@ These are non-obvious, hard-won project facts. Treat as priors:
     overhead dominates, not GPU). One timeframe change (M5 → H4) and one
     optimization-schedule change (constant → cosine+SWA) moved the ensemble
     mean from +1.5 % to +26 %. Spend session time on science, not infra.
-11. **V4 optimal-execution pivot hit the same ceiling.** The hypothesis was
-    that switching the task from "beat buy-and-hold" to "beat TWAP on
-    sub-bar slicing" would expose higher-SNR signal where RL has industrial
-    track record. Phase 1–3 infra works (see
-    [docs/V4_OPTIMAL_EXECUTION.md](docs/V4_OPTIMAL_EXECUTION.md),
+11. **V4 optimal-execution pivot hit the same ceiling** (on the V4-style
+    task). The hypothesis was that switching the task from "beat
+    buy-and-hold" to "beat TWAP on sub-bar slicing" would expose
+    higher-SNR signal where RL has industrial track record. Phase 1–3
+    infra works (see [docs/V4_OPTIMAL_EXECUTION.md](docs/V4_OPTIMAL_EXECUTION.md),
     [env/execution_env.py](env/execution_env.py),
     [validation/grid_execution.py](validation/grid_execution.py)): TWAP
     shadow is exact (savings = 0 when agent acts at TWAP rate), impact
@@ -94,13 +94,24 @@ These are non-obvious, hard-won project facts. Treat as priors:
     came in **median −0.25 bps with CI [−1.5, 0]**, and **5 diagnostic
     levers** (longer training, higher entropy, shorter episodes, 7
     micro-timing features, +execution_features flag) all produced results
-    in [−1.3, +0.7] bps — the policy collapses to either TWAP-clone, a
-    polarised pause/fast mixture, or a lossy slow/fast pattern depending on
-    the regime. **The single Phase 2 +0.73 bps result was single-seed
-    luck**, not a robust signal. Conclusion: M5 retail OHLCV doesn't carry
-    actionable per-bar timing signal *either*. Do not propose V4-style
-    fixes (continuous action, bigger net, more features) — the limit is
-    the data's information content, not the task framing.
+    in [−1.3, +0.7] bps. Conclusion *for the execution task*: M5 retail
+    OHLCV doesn't carry actionable per-bar timing signal under this reward
+    framing.
+12. **BB-volatility feature group is the first lever to beat BH on M5
+    excess** (preliminary, awaiting replication). 8 seed × 4 fold grid
+    ([logs/grid/excess_volgroup_s8/](logs/grid/excess_volgroup_s8/)) with
+    the V3.5 baseline + `--feature-groups volatility` (`bb_pctb`,
+    `bb_bandwidth`, `hist_vol` — Bollinger Bands %B + bandwidth + log-return
+    rolling std): **ensemble median +36.3 %, robustness +38.2, beats BH
+    on 75 % of folds (3 of 4), worst fold +22.7 %**. This contradicts the
+    earlier within-session item 11 conclusion that M5 has no edge — that
+    conclusion was reached on **V4 (execution)** without ever isolating the
+    volatility group on the directional path. Single-seed CI still
+    straddles 0 (variance lives in the ensemble); only 4 folds. **Treat as
+    preliminary** until the 16-seed replication and full-stack tests in
+    [docs/BB_VOLATILITY_FOLLOWUP.md](docs/BB_VOLATILITY_FOLLOWUP.md)
+    confirm or refute. Until those are done: items 3, 6 and the V0–V3.5
+    "negative result" framing are **provisionally on hold**, not retracted.
 
 ---
 
