@@ -38,23 +38,31 @@ from training.train_ppo import _progress_bar_available, resolve_device  # noqa: 
 logger = logging.getLogger("v4_train")
 
 
-def evaluate(model, env: ExecutionGoldEnv, n_episodes: int, seed_base: int):
-    """Run ``n_episodes`` deterministic episodes; return per-episode metrics."""
+def evaluate(model, env: ExecutionGoldEnv, n_episodes: int, seed_base: int,
+             diagnose_actions: bool = False):
+    """Run ``n_episodes`` deterministic episodes; return per-episode metrics
+    (and, optionally, an action-frequency histogram across all steps).
+    """
     savings, sf, twap_sf, n_terminal = [], [], [], 0
+    action_hist = np.zeros(env.action_space.n, dtype=np.int64) if diagnose_actions else None
     for ep in range(n_episodes):
         obs, _ = env.reset(seed=seed_base + ep)
         done = False
         info: dict = {}
         while not done:
             action, _ = model.predict(obs, deterministic=True)
-            obs, _r, term, trunc, info = env.step(int(action))
+            a = int(action)
+            if action_hist is not None:
+                action_hist[a] += 1
+            obs, _r, term, trunc, info = env.step(a)
             done = term or trunc
         if "bps_savings_vs_twap" in info:
             n_terminal += 1
             savings.append(info["bps_savings_vs_twap"])
             sf.append(info["shortfall_bps"])
             twap_sf.append(info["twap_shortfall_bps"])
-    return (np.asarray(savings), np.asarray(sf), np.asarray(twap_sf), n_terminal)
+    return (np.asarray(savings), np.asarray(sf), np.asarray(twap_sf), n_terminal,
+            action_hist)
 
 
 def main() -> None:
@@ -69,12 +77,24 @@ def main() -> None:
     p.add_argument("--deadline-max", type=int, default=128)
     p.add_argument("--fixed-cost-bps", type=float, default=1.0)
     p.add_argument("--impact-bps-per-lot", type=float, default=10.0)
+    p.add_argument("--ent-coef", type=float, default=None,
+                   help="Entropy bonus; overrides config (default 0.01). "
+                        "Higher (0.03–0.1) prevents policy collapse to constant action.")
+    p.add_argument("--diagnose-actions", action="store_true",
+                   help="Print action-frequency histogram during eval.")
+    p.add_argument("--execution-features", action="store_true",
+                   help="Add 7 micro-timing features (ret_1/3/5, body/wick "
+                        "ratios, z_score_5) targeted at intra-episode timing.")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     cfg = Config.from_yaml(args.config) if Path(args.config).exists() else Config()
     cfg.training.policy_arch = args.policy_arch
+    if args.ent_coef is not None:
+        cfg.training.ent_coef = args.ent_coef
+    if args.execution_features:
+        cfg.features.execution_features = True
     cfg.paths.ensure()
     device = resolve_device(cfg.training.device)
 
@@ -125,8 +145,9 @@ def main() -> None:
         fixed_cost_bps=args.fixed_cost_bps,
         impact_bps_per_lot=args.impact_bps_per_lot,
         random_start=True, seed=args.seed + 1000)
-    savings, sf, twap_sf, n_term = evaluate(
-        model, eval_env, args.n_eval_episodes, seed_base=args.seed + 10000)
+    savings, sf, twap_sf, n_term, action_hist = evaluate(
+        model, eval_env, args.n_eval_episodes, seed_base=args.seed + 10000,
+        diagnose_actions=args.diagnose_actions)
     assert n_term == args.n_eval_episodes, \
         f"only {n_term}/{args.n_eval_episodes} episodes terminated"
 
@@ -149,6 +170,12 @@ def main() -> None:
                if np.median(savings) > 0.2 and win_rate > 52 else
                "AMBIGUOUS / NEGATIVE — debug before scaling")
     print(f"\nVerdict (this seed only): {verdict}")
+    if action_hist is not None:
+        names = ["pause(0)", "slow(0.5×)", "TWAP(1×)", "fast(2×)"]
+        total = action_hist.sum()
+        print("\nAction distribution (deterministic eval):")
+        for i, (n, c) in enumerate(zip(names, action_hist)):
+            print(f"   {n:<12} : {c:>6}  ({c/max(total,1)*100:5.1f}%)")
     print("\nNote: single-seed result is not a verdict — distribution + CI from\n"
           "      the grid (Phase 3) is.")
 

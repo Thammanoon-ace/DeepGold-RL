@@ -100,6 +100,12 @@ class FeatureConfig:
     # (e.g. ride strong trends, be cautious when ranging). Causal.
     use_regime_features: bool = False
 
+    # V4 (execution): append 7 short-horizon micro-timing features designed to
+    # surface signals an optimal-execution agent can use to time slices —
+    # ret_{1,3,5}, body_ratio, upper/lower_wick_ratio, z_score_5. Causal.
+    # See docs/V4_OPTIMAL_EXECUTION.md.
+    execution_features: bool = False
+
     # ---- V3 / Phase 4B: Indicator Expansion System --------------------- #
     # Opt-in extra feature GROUPS (see utils/indicators.FEATURE_GROUPS):
     # 'trend' | 'momentum' | 'volatility' | 'candle' | 'structure' | 'volume'.

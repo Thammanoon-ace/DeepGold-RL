@@ -181,6 +181,36 @@ class FeatureEngineer:
                 out[col] = rf[col]
                 feature_columns.append(col)
 
+        # --- V4 execution micro-features ---------------------------------- #
+        # Short-horizon signals (1–5 bars) targeted at *intra-episode* timing
+        # for the optimal-execution agent. The V0–V3.5 feature set captures
+        # medium-term regime / momentum but lacks the next-1-to-5-bar drift
+        # hints an execution policy needs to time its slices. All causal.
+        if getattr(cfg, "execution_features", False):
+            eps = 1e-9
+            # Returns at multiple short horizons.
+            out["ret_1"] = out["close"].pct_change(1)
+            out["ret_3"] = out["close"].pct_change(3)
+            out["ret_5"] = out["close"].pct_change(5)
+            # Candle structure: how the body sits inside the bar's range.
+            bar_range = (out["high"] - out["low"]).replace(0.0, np.nan)
+            body = out["close"] - out["open"]
+            upper_wick = out["high"] - np.maximum(out["close"], out["open"])
+            lower_wick = np.minimum(out["close"], out["open"]) - out["low"]
+            out["body_ratio"] = body / bar_range
+            out["upper_wick_ratio"] = upper_wick / bar_range
+            out["lower_wick_ratio"] = lower_wick / bar_range
+            # Short-horizon z-score: how far is the current close from its
+            # 5-bar mean in std units. A mean-reversion / pullback signal.
+            sma5 = out["close"].rolling(5).mean()
+            std5 = out["close"].rolling(5).std().replace(0.0, np.nan)
+            out["z_score_5"] = (out["close"] - sma5) / (std5 + eps)
+            feature_columns.extend([
+                "ret_1", "ret_3", "ret_5",
+                "body_ratio", "upper_wick_ratio", "lower_wick_ratio",
+                "z_score_5",
+            ])
+
         cfg.feature_columns = feature_columns
 
         # Cleanup that preserves time continuity (critical for the env, which
