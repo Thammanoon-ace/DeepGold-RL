@@ -18,7 +18,7 @@ see [ROADMAP.md](ROADMAP.md) and the docs/ folder.
 
 ---
 
-## Scientific findings — what V0–V3.5 has actually established
+## Scientific findings — what V0–V4 has actually established
 
 These are non-obvious, hard-won project facts. Treat as priors:
 
@@ -81,6 +81,26 @@ These are non-obvious, hard-won project facts. Treat as priors:
     overhead dominates, not GPU). One timeframe change (M5 → H4) and one
     optimization-schedule change (constant → cosine+SWA) moved the ensemble
     mean from +1.5 % to +26 %. Spend session time on science, not infra.
+11. **V4 optimal-execution pivot hit the same ceiling.** The hypothesis was
+    that switching the task from "beat buy-and-hold" to "beat TWAP on
+    sub-bar slicing" would expose higher-SNR signal where RL has industrial
+    track record. Phase 1–3 infra works (see
+    [docs/V4_OPTIMAL_EXECUTION.md](docs/V4_OPTIMAL_EXECUTION.md),
+    [env/execution_env.py](env/execution_env.py),
+    [validation/grid_execution.py](validation/grid_execution.py)): TWAP
+    shadow is exact (savings = 0 when agent acts at TWAP rate), impact
+    tension is +21 bps between forced-finish and TWAP. But the **3 seed × 4
+    fold grid** ([logs/grid/exec_verdict_v1/](logs/grid/exec_verdict_v1))
+    came in **median −0.25 bps with CI [−1.5, 0]**, and **5 diagnostic
+    levers** (longer training, higher entropy, shorter episodes, 7
+    micro-timing features, +execution_features flag) all produced results
+    in [−1.3, +0.7] bps — the policy collapses to either TWAP-clone, a
+    polarised pause/fast mixture, or a lossy slow/fast pattern depending on
+    the regime. **The single Phase 2 +0.73 bps result was single-seed
+    luck**, not a robust signal. Conclusion: M5 retail OHLCV doesn't carry
+    actionable per-bar timing signal *either*. Do not propose V4-style
+    fixes (continuous action, bigger net, more features) — the limit is
+    the data's information content, not the task framing.
 
 ---
 
