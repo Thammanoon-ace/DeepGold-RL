@@ -1,7 +1,21 @@
 # BB-volatility breakthrough — follow-up plan
 
-**Status:** preliminary 8-seed result found a major positive lever; needs
-replication + stacking before claiming firm verdict change.
+**STATUS: REJECTED on 16-seed replication (2026-06-11).** The 8-seed "+36.3 %
+beats BH" result was a small-sample artefact. The Step-1 verdict run
+(`excess_volgroup_s16`) came in at ensemble median **+5.6 %**, robustness
+**+1.08**, **0 %** of folds beat BH, worst fold **−3.8 %** — failing every
+decision criterion below. Per the pre-registered rule (median < +10 % →
+reject, no Step 2), Step 2 was skipped and CLAUDE.md item 12 records the
+rejection. The single-seed distribution is bimodal (std 50 %; half the seeds
+at +50…+150 %, half at the −40 % DD floor); 8 seeds drew more winners by
+chance. See EXPERIMENT_SUMMARY §15.20. **The rest of this document is retained
+as the historical plan; do not act on it.**
+
+---
+
+**Status (original, now superseded):** preliminary 8-seed result found a major
+positive lever; needs replication + stacking before claiming firm verdict
+change.
 
 **Last session (2026-06-10):** added the `volatility` feature group
 (`bb_pctb`, `bb_bandwidth`, `hist_vol`) to the V3.5 baseline (SB3 + CNN +

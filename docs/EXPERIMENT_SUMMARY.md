@@ -1167,3 +1167,53 @@ Artifacts:
 - `logs/grid/excess_bigseed_32_h4_cosine_swa_s32/{...}` (seeds 32-63)
 - `logs/grid/excess_bigseed_32_h4_cosine_swa_s64/{...}` (seeds 64-95)
 - `logs/grid/excess_bigseed_32_h4_cosine_swa_s96/{...}` (seeds 96-127)
+
+### 15.20 BB-volatility feature group — 8-seed promise, 16-seed rejection (2026-06-11)
+A later session (2026-06-10) found an apparent breakthrough: adding the
+`volatility` feature group (`bb_pctb` = Bollinger %B, `bb_bandwidth`,
+`hist_vol`) to the SB3 + CNN + excess + M5 + 30k-step baseline produced, at
+**8 seeds × 4 folds**, an ensemble median of **+36.3 %** with robustness
++38.2 and 75 % of folds beating BH — the first M5 directional result to clear
+the BH bar. It was correctly flagged as preliminary (single-seed CI
+[−19.9, +18.2] straddles 0) and a 16-seed verdict run was pre-registered with
+explicit decision criteria in `docs/BB_VOLATILITY_FOLLOWUP.md`.
+
+**The 16-seed replication (2026-06-11, `excess_volgroup_s16`, identical config
+except 16 seeds × 5 folds) rejected it:**
+
+| metric | 8-seed (original) | **16-seed (replication)** |
+|---|---|---|
+| ensemble median | +36.32 % | **+5.63 %** |
+| ensemble mean | +37.66 % | +6.66 % |
+| robustness | +38.23 | **+1.08** |
+| beats BH (folds) | 75 % | **0 %** |
+| profitable folds | 100 % | 75 % |
+| worst fold | +22.7 % | **−3.80 %** |
+| single-seed CI | [−19.9, +18.2] | [−12.7, +11.2] |
+
+Per-fold ensemble (16-seed): −3.80 / +0.12 / +11.13 / +19.20 %.
+
+**Decision-criteria verdict:** the pre-registered threshold was "ensemble
+median ≥ +25 % AND vs-BH winrate ≥ 60 % AND robustness ≥ +25 → confirm;
+< +10 % → reject, no Step 2." The replication came in at +5.6 % median, 0 %
+winrate, +1.08 robustness — a clean **reject**. The full-stack
+H4+cosine+SWA+volgroup run (Step 2) was correctly skipped.
+
+**Why the 8-seed run lied:** the single-seed distribution is strongly bimodal
+(std 50 %; roughly half the seeds land at +50…+150 %, half at the −40 %
+max-drawdown floor). Eight seeds happened to draw more of the winners; sixteen
+seeds drew a balanced sample and the ensemble averaged to ≈ BH-minus. This is
+the canonical "variance dominates signal" failure (§15 item 1) and is the
+entire reason the V3.5 protocol mandates 16+ seeds before any verdict. The
+episode is a clean worked example of why single-small-sample "beats BH"
+claims must never be trusted — the same discipline that lets us trust the
+negative results.
+
+**Effect on prior verdicts:** the provisional hold that the BB-volatility
+finding had placed on the project's negative-result framing is **lifted**.
+The §15.13 / §15.19 cross-timeframe + four-run conclusions stand: no
+configuration tested — including the isolated BB-volatility group — produces a
+reproducible edge over buy-and-hold on this data.
+
+Artifacts: `logs/grid/excess_volgroup_s8/{...}` (8-seed, do not trust),
+`logs/grid/excess_volgroup_s16/{...}` (16-seed verdict, rejected).

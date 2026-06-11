@@ -206,11 +206,60 @@ replication. They are recorded here so future readers don't believe them:
 | "+27.9 Robustness, 2× the prior baseline" | Retracted: one of four reruns produced −3.9 Robustness. The number is volatile. |
 | "First V4 unblock candidate" | Retracted: no metric the project tracks justifies going live. |
 | "Cosine + SWA is the textbook V3.5 variance-reduction combo and it worked" | Half-true: it worked relative to the failing constant-LR baseline. It did not work against BH. |
+| "BB-volatility feature group beats BH (ensemble +36.3 %, robustness +38.2, 75 % of folds)" — **8-seed run, 2026-06-10** | Retracted: 16-seed replication (2026-06-11) gave ensemble +5.6 %, robustness +1.08, 0 % of folds beat BH. The cleanest small-sample-artefact example in the project (§6.1). |
 
-The pattern: **single-run signals on a 32-seed × 4-fold grid are NOT
-reliable.** Four independent runs at +21.5 % ± 6.7 % is the actual signal.
-Anyone reading this project's earlier docs should weight the single-run
-claims accordingly.
+The pattern: **single-run, small-seed signals on this grid are NOT reliable.**
+Four independent 32-seed runs at +21.5 % ± 6.7 % is the actual cosine+SWA
+signal; the BB-volatility "breakthrough" evaporated entirely when the seed
+count doubled. Anyone reading this project's earlier docs should weight the
+small-sample claims accordingly.
+
+### 6.1 The BB-volatility episode — a worked example of why replication matters
+
+This is worth recording in full because it is the cleanest illustration of
+the project's central methodological lesson.
+
+On 2026-06-10, adding the `volatility` feature group (Bollinger %B +
+bandwidth + historical vol) to the M5 baseline produced, at **8 seeds × 4
+folds**, the best directional result the project had ever seen:
+
+| metric | 8-seed BB-volatility |
+|---|---|
+| ensemble median | **+36.3 %** |
+| robustness | **+38.2** |
+| beats BH (folds) | **75 %** |
+| worst fold | +22.7 % (all folds positive) |
+
+It was the first M5 result to clear buy-and-hold, and it was tempting to
+declare the negative-result verdict overturned. Instead, following the V3.5
+protocol, a 16-seed verdict run was pre-registered with explicit
+accept/reject thresholds *before* it was run.
+
+The **16-seed replication (2026-06-11)** collapsed the result:
+
+| metric | 8-seed | **16-seed** |
+|---|---|---|
+| ensemble median | +36.3 % | **+5.6 %** |
+| robustness | +38.2 | **+1.08** |
+| beats BH (folds) | 75 % | **0 %** |
+| worst fold | +22.7 % | **−3.8 %** |
+
+The cause: the single-seed return distribution is **bimodal** — std ≈ 50
+percentage points, with roughly half the seeds landing at +50 to +150 % and
+half hitting the −40 % max-drawdown floor. Eight seeds happened to draw more
+of the winners; sixteen seeds drew a balanced sample, and the ensemble of a
+balanced bimodal distribution averages to roughly buy-and-hold-minus.
+
+Nothing about the lever changed between the two runs — only the seed count.
+The "+36.3 % beats BH" number was pure sampling noise dressed up as signal.
+Had we acted on the 8-seed run (deployed it, published it, built the
+full-stack experiment on top of it), we would have been building on nothing.
+
+**This is why every "beats BH" claim in this project required ≥ 16 seeds
+before it was believed, and why even the 32-seed cosine+SWA result was
+replicated four times before being written up. The same discipline that lets
+us trust the negative results is the discipline that caught this false
+positive.** See EXPERIMENT_SUMMARY §15.20 for the full data.
 
 ---
 

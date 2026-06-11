@@ -155,13 +155,29 @@ Let the agent *learn* market structure rather than hardcoding chart patterns.
 * **Constraints:** no hardcoded "Head & Shoulders" / subjective patterns; only
   quantifiable structural features; the RL agent learns patterns autonomously.
 
-## V3.5 — Variance Reduction & Stability Phase  ⬜ ← NEXT (blocks V4)
-**Goal:** lower the noise floor until experiments are decidable. Profitability is
-explicitly *not* the objective; **measurability and robustness** are.
+## V3.5 — Variance Reduction & Stability Phase  ✅ COMPLETE (verdict reached)
+
+> **Status (2026-06-11): V3.5 is done and the project has reached its
+> terminal verdict — a rigorous negative result.** See
+> [docs/NEGATIVE_RESULT.md](docs/NEGATIVE_RESULT.md) for the canonical writeup
+> and [docs/EXPERIMENT_SUMMARY.md](docs/EXPERIMENT_SUMMARY.md) §15.8–§15.20 for
+> the experiment log. Summary: the best configuration found (H4 + cosine LR +
+> SWA) produces a positive expected per-cell return but loses to buy-and-hold
+> on raw return (−13.9 pp), Sharpe (−0.72), and max drawdown (+7.9 pp worse)
+> across four independent 32-seed runs. The timeframe sweep (M5/H1/H4/D1)
+> identified H4 as the sweet spot; every gate, ranker, and feature-group lever
+> tried was rejected. V4 (live trading) is **not** justified by any metric.
+
+**Goal (original):** lower the noise floor until experiments are decidable.
+Profitability is explicitly *not* the objective; **measurability and
+robustness** are.
 
 Motivation (measured): multi-seed walk-forward gave compounded returns of
 **−62% to +204% from the random seed alone** → variance dominates any signal,
-so no architecture/feature comparison is currently trustworthy.
+so no architecture/feature comparison is currently trustworthy. *(This
+motivation proved exactly right: the BB-volatility "+36.3 % beats BH" 8-seed
+result of 2026-06-10 was pure sampling noise — the 16-seed replication gave
++5.6 %. See §15.20.)*
 
 Pillars (✅ = implemented & tested this iteration):
 * ✅ **5E Vectorized batched env** (NumPy) — [env/vectorized_env.py](env/vectorized_env.py);
@@ -186,17 +202,22 @@ Pillars (✅ = implemented & tested this iteration):
   **mutual-information ranking** ([utils/feature_selection.py](utils/feature_selection.py),
   fit-on-train, vs forward return). SHAP deferred (needs the `shap` dep + a
   trained model). Finding: volatility features carry the most MI, not direction.
-* ✅ **5F Higher-timeframe support** — `grid_eval.py --timeframe H1` resamples
-  M5→H1/M15 (causal OHLC aggregation) with correct per-TF annualization; the
-  real matched M5-vs-H1 grid run is the pending experiment. (Tiny smoke hinted
-  H1 single-seed std ~33 vs M5 ~107 — directional, needs the full run.)
-* ⬜ Variance reduction (train-to-convergence, SWA, LR/entropy schedules, `target_kl`)
-  and behavior stabilization (cost-aware/Differential-Sharpe reward, vol-targeted
-  sizing).
-* ⬜ Algorithm research (PPO vs SAC/continuous actions vs QR-DQN).
+* ✅ **5F Higher-timeframe support** — `grid_eval.py --timeframe {H1,H4,D1}`
+  resamples M5 with correct per-TF annualization. **Full cross-timeframe
+  verdict reached** (§15.8–§15.13): M5 no edge (CI straddles 0), H1 marginal,
+  **H4 is the sweet spot** (best robustness), D1 significantly negative.
+  Timeframe is the single load-bearing variable for retail-RL on gold.
+* ✅ **Variance reduction** — cosine LR schedule (§15.17) and SWA (§15.18)
+  implemented and tested. Cosine + SWA is the best optimization stack; it
+  lifts the ensemble mean relative to the constant-LR baseline but does **not**
+  beat BH (§15.19 four-run replication). `target_kl` left at None (aggressive
+  early-stop froze the policy near init in prior runs).
+* ⬜ Algorithm research (PPO vs SAC/continuous actions vs QR-DQN) — not done;
+  no longer load-bearing now that the verdict is reached.
 
-**V4 is blocked** until V3.5 yields a config whose OOS *distribution* beats
-baselines at acceptable variance — or a rigorous negative result.
+**V4 outcome:** V3.5 yielded a **rigorous negative result** (one of the two
+pre-registered acceptable outcomes). No config beats baselines at acceptable
+variance. V4 live-trading is not justified by the data.
 
 Full design + analysis: [docs/V3_5_VARIANCE_REDUCTION.md](docs/V3_5_VARIANCE_REDUCTION.md).
 Evidence handoff: [docs/EXPERIMENT_SUMMARY.md](docs/EXPERIMENT_SUMMARY.md).
@@ -250,24 +271,42 @@ every *complexity* lever overfit and hurt. Best agent is competitive with — bu
 does not cleanly beat — buy-and-hold in a structural gold bull. No robust edge;
 the framework correctly refuses to certify one.
 
-## Current position
+## Current position (2026-06-11) — terminal verdict reached
 
-**V0 ✅, V1 ✅, V2 ✅ complete; V3 🟡 — Phase 4A done, 4B/4C pending.** The
-updated roadmap expanded Phase 4 with an Indicator Expansion System (4B) and
-Structural Pattern Intelligence (4C), so V3 is no longer "done": we have the
-deep architectures (LSTM/Transformer/CNN), DQN, multi-timeframe and the
-volatility-regime feature, but the broader indicator set and learned structural
-features remain.
+**V0 ✅, V1 ✅, V2 ✅, V3 ✅ (4A; 4B/4C explored and rejected as overfitting),
+V3.5 ✅ COMPLETE.** The project has reached its terminal state: a **rigorous
+negative result**, which was one of the two pre-registered acceptable
+outcomes.
+
+**The verdict (see [docs/NEGATIVE_RESULT.md](docs/NEGATIVE_RESULT.md)):** RL on
+retail-quality data + retail compute has no tradeable edge over buy-and-hold on
+gold 2019–2025. The best configuration found — H4 timeframe + excess-return
+reward + cosine LR + SWA — produces a positive expected per-cell return
+(single-cell 95 % CI excludes 0 across four independent 32-seed runs) but
+**loses to buy-and-hold on every metric:** raw return by 13.9 pp (agent +12.1 %
+vs BH +25.9 %), Sharpe by 0.72 (agent +0.50 vs BH +1.22), and max drawdown by
+7.9 pp (agent 18.9 % vs BH 11.0 %).
+
+**What the project established (the scientific contribution):**
+1. **Timeframe is the load-bearing variable** — M5 no edge, H4 sweet spot, D1
+   significantly negative. Not architecture, not features.
+2. **Optimization-schedule complexity (cosine + SWA) helps relative to the
+   failing baseline** but does not flip the BH comparison.
+3. **Every observation/architecture/gate/ranker/feature-group lever failed**,
+   including the BB-volatility group whose 8-seed "+36.3 % beats BH" result
+   was a small-sample artefact (16-seed replication: +5.6 %; §15.20).
+4. **Multi-run replication is mandatory** — single-run "beats BH" claims are
+   noise. The harness (multi-seed walk-forward grid + distribution + bootstrap
+   CI + Robustness Score) that proves this is the reusable contribution.
 
 Real data in place: `data/XAUUSD_M5.csv` = real XAUUSD 2019–2025 (496k bars,
-Dukascopy). GPU: torch cu128 (CUDA 12.8).
+Dukascopy). Hardware: RTX PRO 4000 Blackwell 24 GB, torch cu128.
 
-**Decisive finding:** multi-seed walk-forward exposed compounded returns of
-**−62% to +204% from the random seed alone** → no reliable edge yet; variance
-dominates signal. The framework correctly refused to validate a fake edge.
+**V4 (live trading) is not justified by the data.** The infrastructure works
+(train → save → load → predict round-trip verified, `live_trader.py` accepts
+both SB3 `.zip` and CleanRL `.pt` models) but there is no edge to deploy.
 
-**Next increment = V3.5 (Variance Reduction & Stability)** — build the
-vectorized env + distributional/baseline-relative evaluation, test the H1
-timeframe, and apply variance-reduction + behavior-stabilization levers before
-any further feature/architecture work or V4. See
-[docs/V3_5_VARIANCE_REDUCTION.md](docs/V3_5_VARIANCE_REDUCTION.md).
+**Optional remaining work** (none load-bearing): multi-instrument H4
+(EURUSD/BTC/SPX) would confirm or marginally qualify the gold-specific finding;
+a different problem formulation (non-OHLC data, mean-reversion, vol-arb) would
+be a new project. See [docs/NEGATIVE_RESULT.md](docs/NEGATIVE_RESULT.md) §7–§8.

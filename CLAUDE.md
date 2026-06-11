@@ -97,21 +97,26 @@ These are non-obvious, hard-won project facts. Treat as priors:
     in [−1.3, +0.7] bps. Conclusion *for the execution task*: M5 retail
     OHLCV doesn't carry actionable per-bar timing signal under this reward
     framing.
-12. **BB-volatility feature group is the first lever to beat BH on M5
-    excess** (preliminary, awaiting replication). 8 seed × 4 fold grid
-    ([logs/grid/excess_volgroup_s8/](logs/grid/excess_volgroup_s8/)) with
-    the V3.5 baseline + `--feature-groups volatility` (`bb_pctb`,
-    `bb_bandwidth`, `hist_vol` — Bollinger Bands %B + bandwidth + log-return
-    rolling std): **ensemble median +36.3 %, robustness +38.2, beats BH
-    on 75 % of folds (3 of 4), worst fold +22.7 %**. This contradicts the
-    earlier within-session item 11 conclusion that M5 has no edge — that
-    conclusion was reached on **V4 (execution)** without ever isolating the
-    volatility group on the directional path. Single-seed CI still
-    straddles 0 (variance lives in the ensemble); only 4 folds. **Treat as
-    preliminary** until the 16-seed replication and full-stack tests in
-    [docs/BB_VOLATILITY_FOLLOWUP.md](docs/BB_VOLATILITY_FOLLOWUP.md)
-    confirm or refute. Until those are done: items 3, 6 and the V0–V3.5
-    "negative result" framing are **provisionally on hold**, not retracted.
+12. **BB-volatility feature group — REJECTED on 16-seed replication
+    (2026-06-11).** The preliminary 8-seed run
+    ([logs/grid/excess_volgroup_s8/](logs/grid/excess_volgroup_s8/)) showed
+    ensemble median +36.3 %, robustness +38.2, 75 % beats-BH — but it was a
+    **small-sample artefact**. The 16-seed verdict run
+    ([logs/grid/excess_volgroup_s16/](logs/grid/excess_volgroup_s16/),
+    `--feature-groups volatility`, otherwise identical) collapsed to:
+    **ensemble median +5.6 %, robustness +1.08, beats BH on 0 % of folds,
+    worst fold −3.8 %, single-seed CI [−12.7, +11.2] straddles 0.** Per-fold
+    ensemble: −3.8 / +0.1 / +11.1 / +19.2 %. The single-seed distribution is
+    bimodal (std 50 %, half the seeds at +50…+150 %, half at the −40 % DD
+    floor); 8 seeds happened to draw more winners, 16 seeds drew a balanced
+    sample. This is exactly the "variance dominates signal" failure mode of
+    item 1 — and the reason the V3.5 protocol mandates 16+ seeds before any
+    verdict. **Do not revisit the BB-volatility group.** Per the
+    [docs/BB_VOLATILITY_FOLLOWUP.md](docs/BB_VOLATILITY_FOLLOWUP.md) decision
+    criteria (median < +10 % → reject, no Step 2), the full-stack run was
+    correctly skipped. The "provisional hold" this item placed on items 3 / 6
+    and the negative-result framing is **lifted: items 3, 6 and the rigorous
+    negative-result verdict stand as written.**
 
 ---
 
