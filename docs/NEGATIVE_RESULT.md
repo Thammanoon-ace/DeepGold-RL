@@ -285,11 +285,43 @@ The honest implication: if the goal is "profitable trading bot," gold-2025
 assets, alternative data, structural-edge formulations (volatility
 arbitrage, mean reversion on uncorrelated pairs) are more promising.
 
+### 7.1 We tested the stat-arb pivot — it also failed
+
+To avoid leaving "mean-reversion pairs are more promising" as an untested
+hope, we actually ran it (2026-06-12). A classical Kalman-filter pairs
+strategy (Chan 2013 dynamic hedge ratio) on metals, deliberately tested
+classically first — if the classical base has no edge, RL on top won't either,
+and the classical backtest takes hours vs the multi-day RL-env rewrite.
+
+Findings (`scripts/coint_screen.py`, `scripts/kalman_pairs.py`):
+- **Most metals pairs are not cointegrated** over 2019–2025. XAU/XAG, the
+  classic textbook pair, has Engle-Granger p ≈ 0.29 (gold/silver decoupled).
+- **Three pairs are cointegrated** (all anchored on platinum): XAU/XPT
+  (p = 0.006), XPT/XPD (p = 0.007), XAG/XPT (p = 0.010).
+- **But even the cointegrated pairs have no tradeable edge.** Every active
+  Kalman config loses after retail costs (8 bps round-turn); the best Sharpe
+  across all pairs and parameters is ≈ 0, achieved only by a config that
+  barely trades. As the strategy's in-market fraction rises from 3 % to 30 %,
+  Sharpe falls from ~0 to −1.4.
+
+The lesson: **cointegration is necessary but not sufficient.** A statistically
+stationary spread does not imply a profitable one — the magnitude of
+mean-reversion must exceed transaction costs, and on retail metals it does
+not. The stat-arb pivot is closed on this data; the only remaining chances are
+institutional cost structures or a different asset class with a larger
+reversion-to-cost ratio. This is documented so the next reader doesn't repeat
+it expecting a different answer.
+
+### 7.2 The framework is the contribution
+
 If the goal is "rigorous methodology for testing trading hypotheses,"
 DeepGold RL provides one. The harness — multi-seed walk-forward grid,
 per-cell distribution + bootstrap median CI + Robustness Score, GPU-native
-training stack equivalence-verified against the scalar env — is the
-reusable contribution.
+training stack equivalence-verified against the scalar env, plus the
+cointegration screen + Kalman backtest for the stat-arb branch — is the
+reusable contribution. It is good at one thing above all: **refusing to
+certify a false positive**, whether from a lucky 8-seed RL draw or a
+cointegrated-but-untradeable spread.
 
 ---
 

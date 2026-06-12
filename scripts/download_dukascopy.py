@@ -42,6 +42,16 @@ _INTERVAL_NAMES = {
     "H1": "INTERVAL_HOUR_1",
 }
 
+# Map a short symbol to (dukascopy instrument constant name, output CSV stem).
+# Default is gold (XAUUSD); silver added for the Kalman pairs-trading work.
+_INSTRUMENTS = {
+    "XAUUSD": "INSTRUMENT_FX_METALS_XAU_USD",
+    "XAGUSD": "INSTRUMENT_FX_METALS_XAG_USD",
+    "XPTUSD": "INSTRUMENT_CMD_METALS_XPT_CMD_USD",
+    "XPDUSD": "INSTRUMENT_CMD_METALS_XPD_CMD_USD",
+    "COPPER": "INSTRUMENT_CMD_METALS_COPPER_CMD_USD",
+}
+
 
 def _month_starts(start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]:
     """Return month-start boundaries covering [start, end] (inclusive of end)."""
@@ -80,6 +90,8 @@ def main() -> None:
     parser.add_argument("--start", default="2020-01-01")
     parser.add_argument("--end", default="2025-12-31")
     parser.add_argument("--timeframe", default=None, help="M5/M15/H1 (defaults to config).")
+    parser.add_argument("--instrument", default="XAUUSD", choices=list(_INSTRUMENTS),
+                        help="Which symbol to download (default XAUUSD).")
     parser.add_argument("--offer-side", choices=["bid", "ask"], default="bid")
     parser.add_argument("--out", default=None, help="Output CSV path (defaults to data/<SYM>_<TF>.csv).")
     parser.add_argument("--resume", action="store_true",
@@ -96,24 +108,25 @@ def main() -> None:
 
     try:
         import dukascopy_python as d
-        from dukascopy_python.instruments import INSTRUMENT_FX_METALS_XAU_USD
+        import dukascopy_python.instruments as ins
     except ImportError as exc:
         raise SystemExit(
             "dukascopy-python is required. Install with `pip install dukascopy-python`."
         ) from exc
 
+    symbol = args.instrument
     interval = getattr(d, _INTERVAL_NAMES[timeframe])
     offer = d.OFFER_SIDE_BID if args.offer_side == "bid" else d.OFFER_SIDE_ASK
-    instrument = INSTRUMENT_FX_METALS_XAU_USD
+    instrument = getattr(ins, _INSTRUMENTS[symbol])
 
     start = pd.Timestamp(args.start)
     end = pd.Timestamp(args.end)
     bounds = _month_starts(start, end)
-    cache_dir = cfg.paths.data / ".dukascopy_cache" / f"{cfg.data.symbol}_{timeframe}_{args.offer_side}"
+    cache_dir = cfg.paths.data / ".dukascopy_cache" / f"{symbol}_{timeframe}_{args.offer_side}"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Downloading %s %s [%s] %s -> %s (%d monthly chunks)",
-                cfg.data.symbol, timeframe, args.offer_side, start.date(), end.date(), len(bounds) - 1)
+                symbol, timeframe, args.offer_side, start.date(), end.date(), len(bounds) - 1)
 
     frames = []
     for i, (c_start, c_end) in enumerate(zip(bounds[:-1], bounds[1:]), 1):
@@ -145,11 +158,11 @@ def main() -> None:
     full = full[["open", "high", "low", "close", "tick_volume"]]
     full = full.loc[(full.index >= start) & (full.index <= end + pd.Timedelta(days=1))]
 
-    out_path = Path(args.out) if args.out else (cfg.paths.data / f"{cfg.data.symbol}_{timeframe}.csv")
+    out_path = Path(args.out) if args.out else (cfg.paths.data / f"{symbol}_{timeframe}.csv")
     full.to_csv(out_path, index_label="time")
 
     logger.info("Saved %d bars to %s", len(full), out_path)
-    print(f"\nReal XAUUSD {timeframe} data saved to: {out_path}")
+    print(f"\nReal {symbol} {timeframe} data saved to: {out_path}")
     print(f"Rows: {len(full):,} | Range: {full.index.min()} -> {full.index.max()}")
     print("Next: python scripts/inspect_data.py --data \"%s\"" % out_path)
 
