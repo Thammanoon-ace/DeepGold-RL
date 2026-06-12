@@ -298,19 +298,26 @@ Findings (`scripts/coint_screen.py`, `scripts/kalman_pairs.py`):
   classic textbook pair, has Engle-Granger p ≈ 0.29 (gold/silver decoupled).
 - **Three pairs are cointegrated** (all anchored on platinum): XAU/XPT
   (p = 0.006), XPT/XPD (p = 0.007), XAG/XPT (p = 0.010).
-- **But even the cointegrated pairs have no tradeable edge.** Every active
-  Kalman config loses after retail costs (8 bps round-turn); the best Sharpe
-  across all pairs and parameters is ≈ 0, achieved only by a config that
-  barely trades. As the strategy's in-market fraction rises from 3 % to 30 %,
-  Sharpe falls from ~0 to −1.4.
+- **But even the cointegrated pairs have no tradeable edge — and not because
+  of costs.** A frictionless cost sweep (0 / 0.5 / 1.0 / 3.0 bps per leg) at an
+  active config shows every cointegrated pair is **negative even at zero
+  transaction cost**: XPT/XAU Sharpe −0.71, XPT/XPD −0.75, XPT/XAG −0.06 at
+  cost = 0. Retail cost makes it worse (−1.2 to −1.5) but is not the cause. The
+  only non-losing config makes ≈ 0 by barely trading (in-market 3 %), i.e. no
+  exploitable signal at any cost.
 
-The lesson: **cointegration is necessary but not sufficient.** A statistically
-stationary spread does not imply a profitable one — the magnitude of
-mean-reversion must exceed transaction costs, and on retail metals it does
-not. The stat-arb pivot is closed on this data; the only remaining chances are
-institutional cost structures or a different asset class with a larger
-reversion-to-cost ratio. This is documented so the next reader doesn't repeat
-it expecting a different answer.
+The lesson: **cointegration is necessary but not sufficient — and the failure
+here is a signal failure, not a cost failure.** A statistically stationary
+spread does not imply a profitable one. We initially suspected the edge was
+real but below the retail cost floor (which would mean an institutional desk
+could trade it); the frictionless test refuted that — the Kalman z-score on
+these metals at daily frequency is unprofitable even with zero costs, because
+the reversion half-life is long relative to the trading frequency and the
+z-score whipsaws (enters at |z|>1, the spread keeps diverging before
+reverting). Even a zero-cost institutional desk could not trade *this signal*;
+it would need a better timing model, not just lower costs. The stat-arb pivot
+is closed on this data; this is documented so the next reader doesn't repeat it
+expecting costs to be the answer.
 
 ### 7.2 The framework is the contribution
 
